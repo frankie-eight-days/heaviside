@@ -32,7 +32,7 @@ Two-pass-per-frame pattern: compute shader writes field state to a storage textu
 ## Milestones
 
 - [x] **M1 — GPU pipeline scaffold.** Vite+React+TS app with a working WebGPU compute → render loop. Placeholder kernel writes an animated radial ripple to confirm end-to-end plumbing. Aspect-correct, resizes with the window.
-- [ ] **M2 — Real 2D FDTD, no boundaries.** Replace placeholder with Yee-grid TMz update (`Ez`, `Hx`, `Hy`). Hard sinusoidal source at center. Let waves reflect off the edges — instructive failure mode.
+- [x] **M2 — Real 2D FDTD, no boundaries.** Yee-grid TMz update (`Ez`, `Hx`, `Hy`) running in two compute passes per timestep. Hard sinusoidal source at the grid center, PEC walls on all four edges. Waves reflect — instructive failure mode that motivates M3.
 - [ ] **M3 — PML absorbing boundaries.** Add Perfectly Matched Layer along all four edges. Hardest single step. Unlocks every subsequent demo.
 - [ ] **M4 — Material grid.** Per-cell `ε` and `σ`. Paint PEC blocks and lossy regions with the mouse. Reset / clear controls.
 - [ ] **M5 — Source primitives.** Soft current sources, port excitations, plane waves. Gaussian-pulse time-domain source for broadband analysis.

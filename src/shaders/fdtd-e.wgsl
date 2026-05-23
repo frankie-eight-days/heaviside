@@ -1,9 +1,15 @@
-// FDTD 2D TMz — E update + source injection.
-// Reads Hx, Hy at time n+1/2, writes Ez at time n+1.
+// PML-aware Yee E-update for 2D TMz with Berenger split fields.
 //
-// All four interior boundaries (i=0, i=W-1, j=0, j=H-1) hold Ez at 0,
-// giving a PEC (perfect-electric-conductor) wall on every edge.
-// Waves will reflect with sign flip. M3 replaces this with PML.
+// Ezx is driven by  ∂Hy/∂x and damped by σx (x-direction PML).
+// Ezy is driven by -∂Hx/∂y and damped by σy (y-direction PML).
+// Physical Ez = Ezx + Ezy.
+//
+// In the bulk (σx = σy = 0) the updates reduce to the standard FDTD form
+// from M2. Inside a PML region the leading multiplier (Ca = exp(-σΔt))
+// damps the field; in a corner both components are damped.
+//
+// PEC walls remain at i=0, i=W-1, j=0, j=H-1 (Ezx = Ezy = 0). With the PML
+// absorbing the wave first, any residual that reaches the wall is tiny.
 
 struct Uniforms {
   size: vec2<u32>,
@@ -13,9 +19,12 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var<storage, read_write> ez: array<f32>;
-@group(0) @binding(2) var<storage, read> hx: array<f32>;
-@group(0) @binding(3) var<storage, read> hy: array<f32>;
+@group(0) @binding(1) var<storage, read_write> ezx: array<f32>;
+@group(0) @binding(2) var<storage, read_write> ezy: array<f32>;
+@group(0) @binding(3) var<storage, read> hx: array<f32>;
+@group(0) @binding(4) var<storage, read> hy: array<f32>;
+@group(0) @binding(5) var<storage, read> pml_x: array<vec4<f32>>;
+@group(0) @binding(6) var<storage, read> pml_y: array<vec4<f32>>;
 
 fn idx(i: u32, j: u32) -> u32 {
   return j * u.size.x + i;
@@ -29,15 +38,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let H = u.size.y;
   if (i >= W || j >= H) { return; }
 
-  // Interior update only — outer ring of cells stays at Ez=0 (PEC wall).
   if (i > 0u && i + 1u < W && j > 0u && j + 1u < H) {
-    let dhy = hy[idx(i, j)] - hy[idx(i - 1u, j)];
-    let dhx = hx[idx(i, j)] - hx[idx(i, j - 1u)];
-    ez[idx(i, j)] += u.sc * (dhy - dhx);
+    let px = pml_x[i];
+    let py = pml_y[j];
+    let curlHy = hy[idx(i, j)] - hy[idx(i - 1u, j)];
+    let curlHx = hx[idx(i, j)] - hx[idx(i, j - 1u)];
+    ezx[idx(i, j)] = px.x * ezx[idx(i, j)] + px.y * curlHy;
+    ezy[idx(i, j)] = py.x * ezy[idx(i, j)] - py.y * curlHx;
   }
 
-  // Hard sinusoidal source — overwrites Ez at the source cell each step.
+  // Hard sinusoidal source — split evenly between the two components.
   if (i == u.source.x && j == u.source.y) {
-    ez[idx(i, j)] = u.source_value;
+    let half = u.source_value * 0.5;
+    ezx[idx(i, j)] = half;
+    ezy[idx(i, j)] = half;
   }
 }

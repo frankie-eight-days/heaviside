@@ -4,12 +4,21 @@ import renderShaderSrc from '../shaders/field-render.wgsl?raw'
 import type { GPUContext } from './init'
 
 const MAX_FIELD_DIM = 1024
-// Courant number — max stable in 2D is 1/sqrt(2). Equal coefficient on E and H updates.
+// Courant number — max stable in 2D is 1/sqrt(2).
 const SC = 1 / Math.SQRT2
-// Timesteps per sine cycle. Wavelength in cells = SC * SOURCE_PERIOD.
+// Timesteps per sine cycle. Wavelength in cells ≈ SC * SOURCE_PERIOD.
 const SOURCE_PERIOD = 80
-// FDTD steps per RAF frame. >1 makes wave motion visible without burning the GPU.
+// FDTD steps per RAF frame.
 const STEPS_PER_FRAME = 4
+
+// --- PML parameters ---
+// Berenger split-field PML on all four sides. Berenger 1994.
+const PML_THICKNESS = 12
+const PML_ORDER = 3
+const PML_TARGET_R = 1e-6
+// Analytic σ_max in normalized units (ε₀=μ₀=c=Δ=1).
+const SIGMA_MAX =
+  (-(PML_ORDER + 1) * Math.log(PML_TARGET_R)) / (2 * PML_THICKNESS)
 
 export interface FDTDEngine {
   resize: (cssWidth: number, cssHeight: number) => void
@@ -27,11 +36,46 @@ function fieldDimsFromCanvas(w: number, h: number): [number, number] {
   return [Math.max(8, Math.round((safeW / safeH) * MAX_FIELD_DIM)), MAX_FIELD_DIM]
 }
 
+// σ(position) along one PML-bounded axis. Polynomially graded.
+function sigmaAt(position: number, axisLen: number): number {
+  if (position < PML_THICKNESS) {
+    const depth = PML_THICKNESS - position
+    return SIGMA_MAX * Math.pow(depth / PML_THICKNESS, PML_ORDER)
+  }
+  if (position > axisLen - 1 - PML_THICKNESS) {
+    const depth = position - (axisLen - 1 - PML_THICKNESS)
+    return SIGMA_MAX * Math.pow(depth / PML_THICKNESS, PML_ORDER)
+  }
+  return 0
+}
+
+// Exponential-step coefficients for σ. In the σ → 0 limit, Cb → Sc (matches bulk).
+function pmlCoeffs(sigma: number): [number, number] {
+  if (sigma < 1e-12) return [1, SC]
+  const ca = Math.exp(-sigma * SC)
+  return [ca, (1 - ca) / sigma]
+}
+
+// For each index along the axis, pack (Ca_E, Cb_E, Ca_H, Cb_H).
+// E coefficients evaluated at integer position i.
+// H coefficients evaluated at the half-cell position i+1/2 (where Hx/Hy live).
+function buildPMLAxis(len: number): Float32Array {
+  const out = new Float32Array(len * 4)
+  for (let i = 0; i < len; i++) {
+    const [caE, cbE] = pmlCoeffs(sigmaAt(i, len))
+    const [caH, cbH] = pmlCoeffs(sigmaAt(i + 0.5, len))
+    out[4 * i + 0] = caE
+    out[4 * i + 1] = cbE
+    out[4 * i + 2] = caH
+    out[4 * i + 3] = cbH
+  }
+  return out
+}
+
 export function createFDTD(gpu: GPUContext): FDTDEngine {
   const { device, context, format } = gpu
 
-  // Uniforms (32 bytes allocated; 24 used + pad)
-  // Layout matches WGSL struct: size:vec2<u32>, source:vec2<u32>, source_value:f32, sc:f32
+  // Uniforms — see WGSL struct in shaders.
   const uniformBuffer = device.createBuffer({
     size: 32,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -67,9 +111,12 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     primitive: { topology: 'triangle-list' },
   })
 
-  let ezBuffer: GPUBuffer | null = null
+  let ezxBuffer: GPUBuffer | null = null
+  let ezyBuffer: GPUBuffer | null = null
   let hxBuffer: GPUBuffer | null = null
   let hyBuffer: GPUBuffer | null = null
+  let pmlXBuffer: GPUBuffer | null = null
+  let pmlYBuffer: GPUBuffer | null = null
   let eBindGroup: GPUBindGroup | null = null
   let hBindGroup: GPUBindGroup | null = null
   let renderBindGroup: GPUBindGroup | null = null
@@ -79,11 +126,14 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
 
   function resize(cssWidth: number, cssHeight: number) {
     const [w, h] = fieldDimsFromCanvas(cssWidth, cssHeight)
-    if (w === fieldW && h === fieldH && ezBuffer) return
+    if (w === fieldW && h === fieldH && ezxBuffer) return
 
-    ezBuffer?.destroy()
+    ezxBuffer?.destroy()
+    ezyBuffer?.destroy()
     hxBuffer?.destroy()
     hyBuffer?.destroy()
+    pmlXBuffer?.destroy()
+    pmlYBuffer?.destroy()
 
     fieldW = w
     fieldH = h
@@ -91,33 +141,54 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
 
     const byteLen = w * h * 4
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    ezBuffer = device.createBuffer({ size: byteLen, usage })
+    ezxBuffer = device.createBuffer({ size: byteLen, usage })
+    ezyBuffer = device.createBuffer({ size: byteLen, usage })
     hxBuffer = device.createBuffer({ size: byteLen, usage })
     hyBuffer = device.createBuffer({ size: byteLen, usage })
+
+    const pmlX = buildPMLAxis(w)
+    const pmlY = buildPMLAxis(h)
+    pmlXBuffer = device.createBuffer({
+      size: pmlX.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+    pmlYBuffer = device.createBuffer({
+      size: pmlY.byteLength,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+    })
+    device.queue.writeBuffer(pmlXBuffer, 0, pmlX)
+    device.queue.writeBuffer(pmlYBuffer, 0, pmlY)
 
     eBindGroup = device.createBindGroup({
       layout: ePipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: ezBuffer } },
-        { binding: 2, resource: { buffer: hxBuffer } },
-        { binding: 3, resource: { buffer: hyBuffer } },
+        { binding: 1, resource: { buffer: ezxBuffer } },
+        { binding: 2, resource: { buffer: ezyBuffer } },
+        { binding: 3, resource: { buffer: hxBuffer } },
+        { binding: 4, resource: { buffer: hyBuffer } },
+        { binding: 5, resource: { buffer: pmlXBuffer } },
+        { binding: 6, resource: { buffer: pmlYBuffer } },
       ],
     })
     hBindGroup = device.createBindGroup({
       layout: hPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: ezBuffer } },
-        { binding: 2, resource: { buffer: hxBuffer } },
-        { binding: 3, resource: { buffer: hyBuffer } },
+        { binding: 1, resource: { buffer: ezxBuffer } },
+        { binding: 2, resource: { buffer: ezyBuffer } },
+        { binding: 3, resource: { buffer: hxBuffer } },
+        { binding: 4, resource: { buffer: hyBuffer } },
+        { binding: 5, resource: { buffer: pmlXBuffer } },
+        { binding: 6, resource: { buffer: pmlYBuffer } },
       ],
     })
     renderBindGroup = device.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: ezBuffer } },
+        { binding: 1, resource: { buffer: ezxBuffer } },
+        { binding: 2, resource: { buffer: ezyBuffer } },
       ],
     })
 
@@ -174,9 +245,12 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   }
 
   function destroy() {
-    ezBuffer?.destroy()
+    ezxBuffer?.destroy()
+    ezyBuffer?.destroy()
     hxBuffer?.destroy()
     hyBuffer?.destroy()
+    pmlXBuffer?.destroy()
+    pmlYBuffer?.destroy()
     uniformBuffer.destroy()
   }
 

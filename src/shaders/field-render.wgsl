@@ -1,5 +1,5 @@
-// Field renderer — fullscreen triangle that reads the Ez storage buffer
-// and color-maps to a diverging red↔blue palette.
+// Field renderer — samples Ez = Ezx + Ezy (the Berenger split components)
+// and maps the value to a diverging red↔blue palette.
 
 struct Uniforms {
   size: vec2<u32>,
@@ -9,7 +9,8 @@ struct Uniforms {
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var<storage, read> ez: array<f32>;
+@group(0) @binding(1) var<storage, read> ezx: array<f32>;
+@group(0) @binding(2) var<storage, read> ezy: array<f32>;
 
 struct VsOut {
   @builtin(position) pos: vec4<f32>,
@@ -26,8 +27,7 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
   return out;
 }
 
-// Boost so far-field wave amplitudes are visible. 2D cylindrical waves
-// decay as 1/sqrt(r), so the field is much weaker far from the source.
+// 2D cylindrical waves decay as 1/sqrt(r); boost so the far field stays visible.
 const DISPLAY_GAIN: f32 = 3.0;
 
 @fragment
@@ -37,7 +37,8 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
   let coord = in.uv * vec2<f32>(f32(W), f32(H));
   let i = clamp(u32(coord.x), 0u, W - 1u);
   let j = clamp(u32(coord.y), 0u, H - 1u);
-  let v = ez[j * W + i];
+  let k = j * W + i;
+  let v = ezx[k] + ezy[k];
 
   let n = clamp(v * DISPLAY_GAIN, -1.0, 1.0);
   let pos = max(n, 0.0);
