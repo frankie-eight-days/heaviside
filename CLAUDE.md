@@ -33,7 +33,7 @@ Two-pass-per-frame pattern: compute shader writes field state to a storage textu
 
 - [x] **M1 — GPU pipeline scaffold.** Vite+React+TS app with a working WebGPU compute → render loop. Placeholder kernel writes an animated radial ripple to confirm end-to-end plumbing. Aspect-correct, resizes with the window.
 - [x] **M2 — Real 2D FDTD, no boundaries.** Yee-grid TMz update (`Ez`, `Hx`, `Hy`) running in two compute passes per timestep. Hard sinusoidal source at the grid center, PEC walls on all four edges. Waves reflect — instructive failure mode that motivates M3.
-- [ ] **M3 — PML absorbing boundaries.** Add Perfectly Matched Layer along all four edges. Hardest single step. Unlocks every subsequent demo.
+- [x] **M3 — PML absorbing boundaries.** Berenger split-field PML on all four sides, 12 cells thick, cubic σ profile targeting normal-incidence R=1e-6. Ez split into Ezx + Ezy in storage; physical Ez = their sum. Per-cell coefficients precomputed on resize, packed into 1D vec4 axis buffers.
 - [ ] **M4 — Material grid.** Per-cell `ε` and `σ`. Paint PEC blocks and lossy regions with the mouse. Reset / clear controls.
 - [ ] **M5 — Source primitives.** Soft current sources, port excitations, plane waves. Gaussian-pulse time-domain source for broadband analysis.
 - [ ] **M6 — Demo gallery.** Presets following antenna-theory.com: Hertzian dipole, half-wave dipole, monopole + ground plane, 2-element broadside vs end-fire array, Yagi-Uda, parabolic reflector, ...

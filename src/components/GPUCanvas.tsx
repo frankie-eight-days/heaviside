@@ -1,17 +1,65 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { initGPU } from '../gpu/init'
 import { createFDTD, type FDTDEngine } from '../gpu/fdtd'
 
-export default function GPUCanvas() {
+const MAX_UNDO = 30
+
+export interface GPUCanvasHandle {
+  undo: () => void
+  clear: () => void
+  canUndo: () => boolean
+}
+
+interface GPUCanvasProps {
+  material: number
+  brushRadius: number
+  onUndoStackChange: (canUndo: boolean) => void
+}
+
+const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas(
+  { material, brushRadius, onUndoStackChange },
+  ref,
+) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const engineRef = useRef<FDTDEngine | null>(null)
+  const undoStackRef = useRef<Uint32Array[]>([])
+  const isPaintingRef = useRef(false)
+  const materialRef = useRef(material)
+  const brushRef = useRef(brushRadius)
   const [error, setError] = useState<string | null>(null)
+
+  // Keep refs in sync with props so event handlers (closed over once) see latest values.
+  useEffect(() => {
+    materialRef.current = material
+  }, [material])
+  useEffect(() => {
+    brushRef.current = brushRadius
+  }, [brushRadius])
+
+  useImperativeHandle(ref, () => ({
+    undo: () => {
+      const snap = undoStackRef.current.pop()
+      if (snap && engineRef.current) {
+        engineRef.current.restoreMaterials(snap)
+        onUndoStackChange(undoStackRef.current.length > 0)
+      }
+    },
+    clear: () => {
+      const engine = engineRef.current
+      if (!engine) return
+      undoStackRef.current.push(engine.snapshotMaterials())
+      if (undoStackRef.current.length > MAX_UNDO) undoStackRef.current.shift()
+      engine.clearMaterials()
+      onUndoStackChange(undoStackRef.current.length > 0)
+    },
+    canUndo: () => undoStackRef.current.length > 0,
+  }))
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
     let raf = 0
-    let demo: FDTDEngine | null = null
     let cancelled = false
 
     const parent = canvas.parentElement
@@ -30,7 +78,7 @@ export default function GPUCanvas() {
         canvas.width = Math.max(1, Math.floor(w * dpr))
         canvas.height = Math.max(1, Math.floor(h * dpr))
       }
-      demo?.resize(w, h)
+      engineRef.current?.resize(w, h)
     }
     fit()
     const ro = new ResizeObserver(fit)
@@ -39,12 +87,13 @@ export default function GPUCanvas() {
     initGPU(canvas)
       .then((gpu) => {
         if (cancelled) return
-        demo = createFDTD(gpu)
-        demo.resize(lastW, lastH)
+        const engine = createFDTD(gpu)
+        engine.resize(lastW, lastH)
+        engineRef.current = engine
 
         const tick = () => {
-          if (cancelled || !demo) return
-          demo.step()
+          if (cancelled) return
+          engine.step()
           raf = requestAnimationFrame(tick)
         }
         tick()
@@ -57,9 +106,55 @@ export default function GPUCanvas() {
       cancelled = true
       cancelAnimationFrame(raf)
       ro.disconnect()
-      demo?.destroy()
+      engineRef.current?.destroy()
+      engineRef.current = null
     }
   }, [])
+
+  const eventToGrid = (
+    e: React.PointerEvent<HTMLCanvasElement>,
+  ): [number, number] | null => {
+    const engine = engineRef.current
+    if (!engine) return null
+    const canvas = canvasRef.current
+    if (!canvas) return null
+    const rect = canvas.getBoundingClientRect()
+    if (rect.width === 0 || rect.height === 0) return null
+    const { width: W, height: H } = engine.getDims()
+    const xCss = e.clientX - rect.left
+    const yCss = e.clientY - rect.top
+    const gridX = Math.floor((xCss / rect.width) * W)
+    const gridY = Math.floor((yCss / rect.height) * H)
+    return [gridX, gridY]
+  }
+
+  const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const engine = engineRef.current
+    if (!engine) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    isPaintingRef.current = true
+    undoStackRef.current.push(engine.snapshotMaterials())
+    if (undoStackRef.current.length > MAX_UNDO) undoStackRef.current.shift()
+    onUndoStackChange(true)
+    const g = eventToGrid(e)
+    if (g) engine.paint(g[0], g[1], brushRef.current, materialRef.current)
+  }
+
+  const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isPaintingRef.current) return
+    const engine = engineRef.current
+    if (!engine) return
+    const g = eventToGrid(e)
+    if (g) engine.paint(g[0], g[1], brushRef.current, materialRef.current)
+  }
+
+  const onPointerEnd = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!isPaintingRef.current) return
+    isPaintingRef.current = false
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+  }
 
   if (error) {
     return (
@@ -70,5 +165,15 @@ export default function GPUCanvas() {
     )
   }
 
-  return <canvas ref={canvasRef} />
-}
+  return (
+    <canvas
+      ref={canvasRef}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerEnd}
+      onPointerCancel={onPointerEnd}
+    />
+  )
+})
+
+export default GPUCanvas

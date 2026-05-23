@@ -4,26 +4,37 @@ import renderShaderSrc from '../shaders/field-render.wgsl?raw'
 import type { GPUContext } from './init'
 
 const MAX_FIELD_DIM = 1024
-// Courant number — max stable in 2D is 1/sqrt(2).
 const SC = 1 / Math.SQRT2
-// Timesteps per sine cycle. Wavelength in cells ≈ SC * SOURCE_PERIOD.
 const SOURCE_PERIOD = 80
-// FDTD steps per RAF frame.
 const STEPS_PER_FRAME = 4
 
-// --- PML parameters ---
-// Berenger split-field PML on all four sides. Berenger 1994.
+// Berenger split-field PML — see M3 ADR notes.
 const PML_THICKNESS = 12
 const PML_ORDER = 3
 const PML_TARGET_R = 1e-6
-// Analytic σ_max in normalized units (ε₀=μ₀=c=Δ=1).
 const SIGMA_MAX =
   (-(PML_ORDER + 1) * Math.log(PML_TARGET_R)) / (2 * PML_THICKNESS)
+
+// Material parameters — see shader for use.
+const LOSSY_SIGMA = 1.0
+const DIELECTRIC_ER = 4.0
+
+// Material codes — kept in sync with shaders.
+export const MAT_VACUUM = 0
+export const MAT_PEC = 1
+export const MAT_LOSSY = 2
+export const MAT_DIELECTRIC = 3
 
 export interface FDTDEngine {
   resize: (cssWidth: number, cssHeight: number) => void
   step: () => void
   destroy: () => void
+  paint: (gridX: number, gridY: number, brushRadius: number, material: number) => void
+  clearMaterials: () => void
+  snapshotMaterials: () => Uint32Array
+  restoreMaterials: (snapshot: Uint32Array) => void
+  getDims: () => { width: number; height: number }
+  pmlThickness: number
 }
 
 function fieldDimsFromCanvas(w: number, h: number): [number, number] {
@@ -36,7 +47,6 @@ function fieldDimsFromCanvas(w: number, h: number): [number, number] {
   return [Math.max(8, Math.round((safeW / safeH) * MAX_FIELD_DIM)), MAX_FIELD_DIM]
 }
 
-// σ(position) along one PML-bounded axis. Polynomially graded.
 function sigmaAt(position: number, axisLen: number): number {
   if (position < PML_THICKNESS) {
     const depth = PML_THICKNESS - position
@@ -49,16 +59,12 @@ function sigmaAt(position: number, axisLen: number): number {
   return 0
 }
 
-// Exponential-step coefficients for σ. In the σ → 0 limit, Cb → Sc (matches bulk).
 function pmlCoeffs(sigma: number): [number, number] {
   if (sigma < 1e-12) return [1, SC]
   const ca = Math.exp(-sigma * SC)
   return [ca, (1 - ca) / sigma]
 }
 
-// For each index along the axis, pack (Ca_E, Cb_E, Ca_H, Cb_H).
-// E coefficients evaluated at integer position i.
-// H coefficients evaluated at the half-cell position i+1/2 (where Hx/Hy live).
 function buildPMLAxis(len: number): Float32Array {
   const out = new Float32Array(len * 4)
   for (let i = 0; i < len; i++) {
@@ -75,15 +81,26 @@ function buildPMLAxis(len: number): Float32Array {
 export function createFDTD(gpu: GPUContext): FDTDEngine {
   const { device, context, format } = gpu
 
-  // Uniforms — see WGSL struct in shaders.
+  // Uniforms layout (40 bytes content, 64 allocated):
+  //   0: size:vec2<u32>         (W, H)
+  //   8: source:vec2<u32>       (sx, sy)
+  //  16: source_value:f32
+  //  20: sc:f32
+  //  24: lossy_sigma:f32
+  //  28: dielectric_er:f32
+  //  32: pml_thickness:u32
+  //  36: _pad:u32
   const uniformBuffer = device.createBuffer({
-    size: 32,
+    size: 64,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  const uniformBytes = new ArrayBuffer(32)
+  const uniformBytes = new ArrayBuffer(64)
   const uniformU32 = new Uint32Array(uniformBytes)
   const uniformF32 = new Float32Array(uniformBytes)
   uniformF32[5] = SC
+  uniformF32[6] = LOSSY_SIGMA
+  uniformF32[7] = DIELECTRIC_ER
+  uniformU32[8] = PML_THICKNESS
 
   const ePipeline = device.createComputePipeline({
     layout: 'auto',
@@ -117,12 +134,20 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   let hyBuffer: GPUBuffer | null = null
   let pmlXBuffer: GPUBuffer | null = null
   let pmlYBuffer: GPUBuffer | null = null
+  let materialBuffer: GPUBuffer | null = null
+  let materialGrid: Uint32Array | null = null
   let eBindGroup: GPUBindGroup | null = null
   let hBindGroup: GPUBindGroup | null = null
   let renderBindGroup: GPUBindGroup | null = null
   let fieldW = 0
   let fieldH = 0
   let stepCount = 0
+
+  function uploadMaterials() {
+    if (materialBuffer && materialGrid) {
+      device.queue.writeBuffer(materialBuffer, 0, materialGrid)
+    }
+  }
 
   function resize(cssWidth: number, cssHeight: number) {
     const [w, h] = fieldDimsFromCanvas(cssWidth, cssHeight)
@@ -134,17 +159,20 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     hyBuffer?.destroy()
     pmlXBuffer?.destroy()
     pmlYBuffer?.destroy()
+    materialBuffer?.destroy()
 
     fieldW = w
     fieldH = h
     stepCount = 0
+    materialGrid = new Uint32Array(w * h)
 
-    const byteLen = w * h * 4
-    const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    ezxBuffer = device.createBuffer({ size: byteLen, usage })
-    ezyBuffer = device.createBuffer({ size: byteLen, usage })
-    hxBuffer = device.createBuffer({ size: byteLen, usage })
-    hyBuffer = device.createBuffer({ size: byteLen, usage })
+    const fieldBytes = w * h * 4
+    const fieldUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+    ezxBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    ezyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    hxBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    hyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    materialBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
 
     const pmlX = buildPMLAxis(w)
     const pmlY = buildPMLAxis(h)
@@ -169,6 +197,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         { binding: 4, resource: { buffer: hyBuffer } },
         { binding: 5, resource: { buffer: pmlXBuffer } },
         { binding: 6, resource: { buffer: pmlYBuffer } },
+        { binding: 7, resource: { buffer: materialBuffer } },
       ],
     })
     hBindGroup = device.createBindGroup({
@@ -189,6 +218,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: { buffer: ezxBuffer } },
         { binding: 2, resource: { buffer: ezyBuffer } },
+        { binding: 2 + 1, resource: { buffer: materialBuffer } },
       ],
     })
 
@@ -196,6 +226,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     uniformU32[1] = h
     uniformU32[2] = Math.floor(w / 2)
     uniformU32[3] = Math.floor(h / 2)
+    uploadMaterials()
   }
 
   function step() {
@@ -244,6 +275,49 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     device.queue.submit([encoder.finish()])
   }
 
+  function paint(gridX: number, gridY: number, brushRadius: number, material: number) {
+    if (!materialGrid) return
+    const W = fieldW
+    const H = fieldH
+    const r = Math.max(0, Math.floor(brushRadius))
+    const r2 = r * r
+    const xMin = Math.max(PML_THICKNESS, gridX - r)
+    const xMax = Math.min(W - PML_THICKNESS - 1, gridX + r)
+    const yMin = Math.max(PML_THICKNESS, gridY - r)
+    const yMax = Math.min(H - PML_THICKNESS - 1, gridY + r)
+    for (let j = yMin; j <= yMax; j++) {
+      for (let i = xMin; i <= xMax; i++) {
+        const dx = i - gridX
+        const dy = j - gridY
+        if (dx * dx + dy * dy <= r2) {
+          materialGrid[j * W + i] = material
+        }
+      }
+    }
+    uploadMaterials()
+  }
+
+  function clearMaterials() {
+    if (!materialGrid) return
+    materialGrid.fill(0)
+    uploadMaterials()
+  }
+
+  function snapshotMaterials(): Uint32Array {
+    if (!materialGrid) return new Uint32Array(0)
+    return new Uint32Array(materialGrid)
+  }
+
+  function restoreMaterials(snapshot: Uint32Array) {
+    if (!materialGrid || snapshot.length !== materialGrid.length) return
+    materialGrid.set(snapshot)
+    uploadMaterials()
+  }
+
+  function getDims() {
+    return { width: fieldW, height: fieldH }
+  }
+
   function destroy() {
     ezxBuffer?.destroy()
     ezyBuffer?.destroy()
@@ -251,8 +325,19 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     hyBuffer?.destroy()
     pmlXBuffer?.destroy()
     pmlYBuffer?.destroy()
+    materialBuffer?.destroy()
     uniformBuffer.destroy()
   }
 
-  return { resize, step, destroy }
+  return {
+    resize,
+    step,
+    destroy,
+    paint,
+    clearMaterials,
+    snapshotMaterials,
+    restoreMaterials,
+    getDims,
+    pmlThickness: PML_THICKNESS,
+  }
 }

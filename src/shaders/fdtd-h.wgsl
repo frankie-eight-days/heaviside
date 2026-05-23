@@ -1,13 +1,17 @@
-// PML-aware Yee H-update for 2D TMz with Berenger split fields.
-// Ez is split into Ezx + Ezy; the bulk Ez seen by H equals their sum.
-// Hx is damped by σy (the y-direction PML conductivity).
-// Hy is damped by σx (the x-direction PML conductivity).
+// PML-aware Yee H-update for 2D TMz.
+// Materials (other than μ_r ≠ 1, not currently supported) don't affect the
+// H-update — only the E-update sees ε_r and σ. So this shader is unchanged
+// from M3 except for the uniforms struct growing to match the E shader.
 
 struct Uniforms {
   size: vec2<u32>,
   source: vec2<u32>,
   source_value: f32,
   sc: f32,
+  lossy_sigma: f32,
+  dielectric_er: f32,
+  pml_thickness: u32,
+  _pad: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -35,14 +39,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let H = u.size.y;
   if (i >= W || j >= H) { return; }
 
-  // Hx[i, j+1/2] uses σy at half-cell j+1/2 → pml_y[j].zw
   if (j + 1u < H) {
     let py = pml_y[j];
     let curl = ez_at(i, j + 1u) - ez_at(i, j);
     hx[idx(i, j)] = py.z * hx[idx(i, j)] - py.w * curl;
   }
 
-  // Hy[i+1/2, j] uses σx at half-cell i+1/2 → pml_x[i].zw
   if (i + 1u < W) {
     let px = pml_x[i];
     let curl = ez_at(i + 1u, j) - ez_at(i, j);
