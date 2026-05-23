@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { initGPU } from '../gpu/init'
-import { createDemo, type DemoEngine } from '../gpu/demo'
+import { createFDTD, type FDTDEngine } from '../gpu/fdtd'
 
 export default function GPUCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -11,9 +11,8 @@ export default function GPUCanvas() {
     if (!canvas) return
 
     let raf = 0
-    let demo: DemoEngine | null = null
+    let demo: FDTDEngine | null = null
     let cancelled = false
-    const start = performance.now()
 
     const parent = canvas.parentElement
     let lastW = 0
@@ -40,13 +39,12 @@ export default function GPUCanvas() {
     initGPU(canvas)
       .then((gpu) => {
         if (cancelled) return
-        demo = createDemo(gpu)
+        demo = createFDTD(gpu)
         demo.resize(lastW, lastH)
 
         const tick = () => {
           if (cancelled || !demo) return
-          const elapsed = (performance.now() - start) / 1000
-          demo.step(elapsed)
+          demo.step()
           raf = requestAnimationFrame(tick)
         }
         tick()
