@@ -1,9 +1,7 @@
-import {
-  MAT_VACUUM,
-  MAT_PEC,
-  MAT_LOSSY,
-  MAT_DIELECTRIC,
-} from '../gpu/fdtd'
+export const MAT_VACUUM = 0
+export const MAT_PEC = 1
+export const MAT_LOSSY = 2
+export const MAT_DIELECTRIC = 3
 
 interface MaterialOption {
   id: number
@@ -23,8 +21,13 @@ interface ToolbarProps {
   onMaterialChange: (id: number) => void
   brushRadius: number
   onBrushChange: (r: number) => void
+  epsilonR: number
+  onEpsilonRChange: (v: number) => void
+  sigma: number
+  onSigmaChange: (v: number) => void
   onUndo: () => void
-  onClear: () => void
+  onResetFields: () => void
+  onResetMaterials: () => void
   canUndo: boolean
 }
 
@@ -33,8 +36,13 @@ export default function Toolbar({
   onMaterialChange,
   brushRadius,
   onBrushChange,
+  epsilonR,
+  onEpsilonRChange,
+  sigma,
+  onSigmaChange,
   onUndo,
-  onClear,
+  onResetFields,
+  onResetMaterials,
   canUndo,
 }: ToolbarProps) {
   return (
@@ -55,7 +63,37 @@ export default function Toolbar({
         ))}
       </div>
 
-      <label className="brush-slider">
+      {material === MAT_DIELECTRIC && (
+        <label className="param-slider">
+          εr
+          <input
+            type="range"
+            min={1}
+            max={12}
+            step={0.1}
+            value={epsilonR}
+            onChange={(e) => onEpsilonRChange(Number(e.target.value))}
+          />
+          <span className="param-value">{epsilonR.toFixed(1)}</span>
+        </label>
+      )}
+
+      {material === MAT_LOSSY && (
+        <label className="param-slider">
+          σ
+          <input
+            type="range"
+            min={0}
+            max={2}
+            step={0.05}
+            value={sigma}
+            onChange={(e) => onSigmaChange(Number(e.target.value))}
+          />
+          <span className="param-value">{sigma.toFixed(2)}</span>
+        </label>
+      )}
+
+      <label className="param-slider">
         Brush
         <input
           type="range"
@@ -65,7 +103,7 @@ export default function Toolbar({
           value={brushRadius}
           onChange={(e) => onBrushChange(Number(e.target.value))}
         />
-        <span className="brush-value">{brushRadius}</span>
+        <span className="param-value">{brushRadius}</span>
       </label>
 
       <div className="action-group">
@@ -78,8 +116,11 @@ export default function Toolbar({
         >
           Undo
         </button>
-        <button type="button" onClick={onClear} className="action-btn">
-          Clear
+        <button type="button" onClick={onResetFields} className="action-btn">
+          Reset fields
+        </button>
+        <button type="button" onClick={onResetMaterials} className="action-btn">
+          Reset materials
         </button>
       </div>
     </div>

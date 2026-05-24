@@ -1,27 +1,20 @@
-// PML-aware Yee E-update with per-cell materials.
+// PML-aware Yee E-update with per-cell ε, σ and a PEC flag bit.
 //
 // Cells in the PML region use the precomputed PML coefficients (assume vacuum).
-// Cells in the bulk consult the material grid:
-//   0 (vacuum)     → Ca=1, Cb=Sc
-//   1 (PEC)        → hard constraint Ezx = Ezy = 0
-//   2 (lossy)      → loss coefficients from u.lossy_sigma (semi-implicit form)
-//   3 (dielectric) → Cb scaled by 1/ε_r (wave slows, wavelength compresses)
+// Cells with FLAG_PEC set are hard-clamped to Ez = 0.
+// Otherwise: per-cell (εr, σ) drives lossy-medium Yee coefficients computed
+// in-shader. See docs/decisions/0003 for the calibration.
 
 struct Uniforms {
   size: vec2<u32>,
   source: vec2<u32>,
   source_value: f32,
   sc: f32,
-  lossy_sigma: f32,
-  dielectric_er: f32,
   pml_thickness: u32,
   _pad: u32,
 };
 
-const MAT_VACUUM: u32 = 0u;
-const MAT_PEC: u32 = 1u;
-const MAT_LOSSY: u32 = 2u;
-const MAT_DIELECTRIC: u32 = 3u;
+const FLAG_PEC: u32 = 1u;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read_write> ezx: array<f32>;
@@ -30,7 +23,10 @@ const MAT_DIELECTRIC: u32 = 3u;
 @group(0) @binding(4) var<storage, read> hy: array<f32>;
 @group(0) @binding(5) var<storage, read> pml_x: array<vec4<f32>>;
 @group(0) @binding(6) var<storage, read> pml_y: array<vec4<f32>>;
-@group(0) @binding(7) var<storage, read> material: array<u32>;
+// material[k] = vec2(epsilon_r, sigma). Packed to stay under the default
+// 8-storage-buffers-per-stage WebGPU limit.
+@group(0) @binding(7) var<storage, read> material: array<vec2<f32>>;
+@group(0) @binding(8) var<storage, read> flags: array<u32>;
 
 fn idx(i: u32, j: u32) -> u32 {
   return j * u.size.x + i;
@@ -39,21 +35,6 @@ fn idx(i: u32, j: u32) -> u32 {
 fn in_pml(i: u32, j: u32) -> bool {
   let t = u.pml_thickness;
   return i < t || j < t || i + t >= u.size.x || j + t >= u.size.y;
-}
-
-// Returns (Ca, Cb) for a non-PEC material.
-fn material_coeffs(mat: u32) -> vec2<f32> {
-  if (mat == MAT_LOSSY) {
-    let s = u.lossy_sigma;
-    let half_st = s * u.sc * 0.5;
-    let denom = 1.0 + half_st;
-    return vec2<f32>((1.0 - half_st) / denom, u.sc / denom);
-  }
-  if (mat == MAT_DIELECTRIC) {
-    return vec2<f32>(1.0, u.sc / u.dielectric_er);
-  }
-  // vacuum (and PEC handled separately)
-  return vec2<f32>(1.0, u.sc);
 }
 
 @compute @workgroup_size(8, 8)
@@ -76,16 +57,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       let py = pml_y[j];
       ezx[k] = px.x * ezx[k] + px.y * curlHy;
       ezy[k] = py.x * ezy[k] - py.y * curlHx;
+    } else if ((flags[k] & FLAG_PEC) != 0u) {
+      ezx[k] = 0.0;
+      ezy[k] = 0.0;
     } else {
       let mat = material[k];
-      if (mat == MAT_PEC) {
-        ezx[k] = 0.0;
-        ezy[k] = 0.0;
-      } else {
-        let c = material_coeffs(mat);
-        ezx[k] = c.x * ezx[k] + c.y * curlHy;
-        ezy[k] = c.x * ezy[k] - c.y * curlHx;
-      }
+      let er = mat.x;
+      let s = mat.y;
+      let loss = s * u.sc / (2.0 * er);
+      let denom = 1.0 + loss;
+      let ca = (1.0 - loss) / denom;
+      let cb = (u.sc / er) / denom;
+      ezx[k] = ca * ezx[k] + cb * curlHy;
+      ezy[k] = ca * ezy[k] - cb * curlHx;
     }
   }
 

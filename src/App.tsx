@@ -1,21 +1,38 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import GPUCanvas, { type GPUCanvasHandle } from './components/GPUCanvas'
-import Toolbar from './components/Toolbar'
-import { MAT_PEC } from './gpu/fdtd'
+import Toolbar, {
+  MAT_PEC,
+  MAT_LOSSY,
+  MAT_DIELECTRIC,
+} from './components/Toolbar'
+import type { BrushSpec } from './gpu/fdtd'
 import './App.css'
 
 export default function App() {
   const [material, setMaterial] = useState<number>(MAT_PEC)
   const [brushRadius, setBrushRadius] = useState(5)
+  const [epsilonR, setEpsilonR] = useState(4)
+  const [sigma, setSigma] = useState(1)
   const [canUndo, setCanUndo] = useState(false)
   const canvasHandle = useRef<GPUCanvasHandle | null>(null)
+
+  const brush = useMemo<BrushSpec>(() => {
+    if (material === MAT_PEC) return { epsilonR: 1, sigma: 0, pec: true }
+    if (material === MAT_DIELECTRIC) return { epsilonR, sigma: 0, pec: false }
+    if (material === MAT_LOSSY) return { epsilonR: 1, sigma, pec: false }
+    return { epsilonR: 1, sigma: 0, pec: false }
+  }, [material, epsilonR, sigma])
 
   const handleUndo = useCallback(() => {
     canvasHandle.current?.undo()
   }, [])
 
-  const handleClear = useCallback(() => {
-    canvasHandle.current?.clear()
+  const handleResetFields = useCallback(() => {
+    canvasHandle.current?.resetFields()
+  }, [])
+
+  const handleResetMaterials = useCallback(() => {
+    canvasHandle.current?.resetMaterials()
   }, [])
 
   // Cmd/Ctrl+Z for undo at the window level.
@@ -43,14 +60,19 @@ export default function App() {
         onMaterialChange={setMaterial}
         brushRadius={brushRadius}
         onBrushChange={setBrushRadius}
+        epsilonR={epsilonR}
+        onEpsilonRChange={setEpsilonR}
+        sigma={sigma}
+        onSigmaChange={setSigma}
         onUndo={handleUndo}
-        onClear={handleClear}
+        onResetFields={handleResetFields}
+        onResetMaterials={handleResetMaterials}
         canUndo={canUndo}
       />
       <main className="canvas-wrap">
         <GPUCanvas
           ref={canvasHandle}
-          material={material}
+          brush={brush}
           brushRadius={brushRadius}
           onUndoStackChange={setCanUndo}
         />

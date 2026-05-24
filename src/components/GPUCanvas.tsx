@@ -1,39 +1,45 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { initGPU } from '../gpu/init'
-import { createFDTD, type FDTDEngine } from '../gpu/fdtd'
+import {
+  createFDTD,
+  type BrushSpec,
+  type FDTDEngine,
+  type MaterialSnapshot,
+} from '../gpu/fdtd'
 
-const MAX_UNDO = 30
+const MAX_UNDO = 10
 
 export interface GPUCanvasHandle {
   undo: () => void
-  clear: () => void
+  resetMaterials: () => void
+  resetFields: () => void
   canUndo: () => boolean
 }
 
 interface GPUCanvasProps {
-  material: number
+  brush: BrushSpec
   brushRadius: number
   onUndoStackChange: (canUndo: boolean) => void
 }
 
 const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas(
-  { material, brushRadius, onUndoStackChange },
+  { brush, brushRadius, onUndoStackChange },
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   const engineRef = useRef<FDTDEngine | null>(null)
-  const undoStackRef = useRef<Uint32Array[]>([])
+  const undoStackRef = useRef<MaterialSnapshot[]>([])
   const isPaintingRef = useRef(false)
-  const materialRef = useRef(material)
-  const brushRef = useRef(brushRadius)
+  const brushRef = useRef(brush)
+  const brushRadiusRef = useRef(brushRadius)
   const [error, setError] = useState<string | null>(null)
 
   // Keep refs in sync with props so event handlers (closed over once) see latest values.
   useEffect(() => {
-    materialRef.current = material
-  }, [material])
+    brushRef.current = brush
+  }, [brush])
   useEffect(() => {
-    brushRef.current = brushRadius
+    brushRadiusRef.current = brushRadius
   }, [brushRadius])
 
   useImperativeHandle(ref, () => ({
@@ -44,13 +50,16 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
         onUndoStackChange(undoStackRef.current.length > 0)
       }
     },
-    clear: () => {
+    resetMaterials: () => {
       const engine = engineRef.current
       if (!engine) return
       undoStackRef.current.push(engine.snapshotMaterials())
       if (undoStackRef.current.length > MAX_UNDO) undoStackRef.current.shift()
-      engine.clearMaterials()
+      engine.resetMaterials()
       onUndoStackChange(undoStackRef.current.length > 0)
+    },
+    resetFields: () => {
+      engineRef.current?.resetFields()
     },
     canUndo: () => undoStackRef.current.length > 0,
   }))
@@ -137,7 +146,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     if (undoStackRef.current.length > MAX_UNDO) undoStackRef.current.shift()
     onUndoStackChange(true)
     const g = eventToGrid(e)
-    if (g) engine.paint(g[0], g[1], brushRef.current, materialRef.current)
+    if (g) engine.paint(g[0], g[1], brushRadiusRef.current, brushRef.current)
   }
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -145,7 +154,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     const engine = engineRef.current
     if (!engine) return
     const g = eventToGrid(e)
-    if (g) engine.paint(g[0], g[1], brushRef.current, materialRef.current)
+    if (g) engine.paint(g[0], g[1], brushRadiusRef.current, brushRef.current)
   }
 
   const onPointerEnd = (e: React.PointerEvent<HTMLCanvasElement>) => {

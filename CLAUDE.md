@@ -34,7 +34,7 @@ Two-pass-per-frame pattern: compute shader writes field state to a storage textu
 - [x] **M1 — GPU pipeline scaffold.** Vite+React+TS app with a working WebGPU compute → render loop. Placeholder kernel writes an animated radial ripple to confirm end-to-end plumbing. Aspect-correct, resizes with the window.
 - [x] **M2 — Real 2D FDTD, no boundaries.** Yee-grid TMz update (`Ez`, `Hx`, `Hy`) running in two compute passes per timestep. Hard sinusoidal source at the grid center, PEC walls on all four edges. Waves reflect — instructive failure mode that motivates M3.
 - [x] **M3 — PML absorbing boundaries.** Berenger split-field PML on all four sides, 12 cells thick, cubic σ profile targeting normal-incidence R=1e-6. Ez split into Ezx + Ezy in storage; physical Ez = their sum. Per-cell coefficients precomputed on resize, packed into 1D vec4 axis buffers.
-- [ ] **M4 — Material grid.** Per-cell `ε` and `σ`. Paint PEC blocks and lossy regions with the mouse. Reset / clear controls.
+- [x] **M4 — Material grid.** Per-cell `ε` and `σ` as continuous fields plus a PEC flag bit. Four-button brush palette (Vacuum / PEC / Lossy / Dielectric) with contextual εr or σ slider that adjusts the brush before each stroke. Reset fields and Reset materials are separate actions.
 - [ ] **M5 — Source primitives.** Soft current sources, port excitations, plane waves. Gaussian-pulse time-domain source for broadband analysis.
 - [ ] **M6 — Demo gallery.** Presets following antenna-theory.com: Hertzian dipole, half-wave dipole, monopole + ground plane, 2-element broadside vs end-fire array, Yagi-Uda, parabolic reflector, ...
 - [ ] **M7 — 3D FDTD.** Extend to 3D. Volume rendering with slice planes. Near-to-far-field transforms for quantitative radiation patterns.
@@ -46,6 +46,7 @@ Architectural decisions are recorded in [`docs/decisions/`](docs/decisions/) as 
 Current ADRs:
 - [0001 — Stack: Vite + React + TS](docs/decisions/0001-stack-vite-react-ts.md)
 - [0002 — 2D FDTD, TMz polarization first](docs/decisions/0002-2d-fdtd-tmz-first.md)
+- [0003 — Per-cell ε and σ as continuous fields, PEC as a flag](docs/decisions/0003-per-cell-eps-sigma.md)
 
 ## Dev
 

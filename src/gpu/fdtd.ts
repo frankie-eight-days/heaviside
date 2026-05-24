@@ -15,24 +15,28 @@ const PML_TARGET_R = 1e-6
 const SIGMA_MAX =
   (-(PML_ORDER + 1) * Math.log(PML_TARGET_R)) / (2 * PML_THICKNESS)
 
-// Material parameters — see shader for use.
-const LOSSY_SIGMA = 1.0
-const DIELECTRIC_ER = 4.0
+export const FLAG_PEC = 1
 
-// Material codes — kept in sync with shaders.
-export const MAT_VACUUM = 0
-export const MAT_PEC = 1
-export const MAT_LOSSY = 2
-export const MAT_DIELECTRIC = 3
+export interface BrushSpec {
+  epsilonR: number
+  sigma: number
+  pec: boolean
+}
+
+export interface MaterialSnapshot {
+  epsSig: Float32Array
+  flags: Uint32Array
+}
 
 export interface FDTDEngine {
   resize: (cssWidth: number, cssHeight: number) => void
   step: () => void
   destroy: () => void
-  paint: (gridX: number, gridY: number, brushRadius: number, material: number) => void
-  clearMaterials: () => void
-  snapshotMaterials: () => Uint32Array
-  restoreMaterials: (snapshot: Uint32Array) => void
+  paint: (gridX: number, gridY: number, brushRadius: number, brush: BrushSpec) => void
+  resetMaterials: () => void
+  resetFields: () => void
+  snapshotMaterials: () => MaterialSnapshot
+  restoreMaterials: (snapshot: MaterialSnapshot) => void
   getDims: () => { width: number; height: number }
   pmlThickness: number
 }
@@ -81,26 +85,22 @@ function buildPMLAxis(len: number): Float32Array {
 export function createFDTD(gpu: GPUContext): FDTDEngine {
   const { device, context, format } = gpu
 
-  // Uniforms layout (40 bytes content, 64 allocated):
+  // Uniforms layout (32 bytes):
   //   0: size:vec2<u32>         (W, H)
   //   8: source:vec2<u32>       (sx, sy)
   //  16: source_value:f32
   //  20: sc:f32
-  //  24: lossy_sigma:f32
-  //  28: dielectric_er:f32
-  //  32: pml_thickness:u32
-  //  36: _pad:u32
+  //  24: pml_thickness:u32
+  //  28: _pad:u32
   const uniformBuffer = device.createBuffer({
-    size: 64,
+    size: 32,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  const uniformBytes = new ArrayBuffer(64)
+  const uniformBytes = new ArrayBuffer(32)
   const uniformU32 = new Uint32Array(uniformBytes)
   const uniformF32 = new Float32Array(uniformBytes)
   uniformF32[5] = SC
-  uniformF32[6] = LOSSY_SIGMA
-  uniformF32[7] = DIELECTRIC_ER
-  uniformU32[8] = PML_THICKNESS
+  uniformU32[6] = PML_THICKNESS
 
   const ePipeline = device.createComputePipeline({
     layout: 'auto',
@@ -134,8 +134,13 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   let hyBuffer: GPUBuffer | null = null
   let pmlXBuffer: GPUBuffer | null = null
   let pmlYBuffer: GPUBuffer | null = null
+  // Packed material grid: interleaved (epsilonR, sigma) as vec2<f32> per cell.
+  // Packed (rather than two parallel f32 buffers) to stay under the default
+  // WebGPU 8-storage-buffers-per-stage limit.
   let materialBuffer: GPUBuffer | null = null
-  let materialGrid: Uint32Array | null = null
+  let flagsBuffer: GPUBuffer | null = null
+  let epsSigGrid: Float32Array | null = null
+  let flagsGrid: Uint32Array | null = null
   let eBindGroup: GPUBindGroup | null = null
   let hBindGroup: GPUBindGroup | null = null
   let renderBindGroup: GPUBindGroup | null = null
@@ -144,9 +149,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   let stepCount = 0
 
   function uploadMaterials() {
-    if (materialBuffer && materialGrid) {
-      device.queue.writeBuffer(materialBuffer, 0, materialGrid)
-    }
+    if (!materialBuffer || !flagsBuffer) return
+    if (!epsSigGrid || !flagsGrid) return
+    device.queue.writeBuffer(materialBuffer, 0, epsSigGrid)
+    device.queue.writeBuffer(flagsBuffer, 0, flagsGrid)
   }
 
   function resize(cssWidth: number, cssHeight: number) {
@@ -160,11 +166,14 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     pmlXBuffer?.destroy()
     pmlYBuffer?.destroy()
     materialBuffer?.destroy()
+    flagsBuffer?.destroy()
 
     fieldW = w
     fieldH = h
     stepCount = 0
-    materialGrid = new Uint32Array(w * h)
+    epsSigGrid = new Float32Array(w * h * 2)
+    for (let i = 0; i < w * h; i++) epsSigGrid[2 * i] = 1.0
+    flagsGrid = new Uint32Array(w * h)
 
     const fieldBytes = w * h * 4
     const fieldUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
@@ -172,7 +181,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     ezyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
     hxBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
     hyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
-    materialBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    materialBuffer = device.createBuffer({ size: fieldBytes * 2, usage: fieldUsage })
+    flagsBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
 
     const pmlX = buildPMLAxis(w)
     const pmlY = buildPMLAxis(h)
@@ -198,6 +208,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         { binding: 5, resource: { buffer: pmlXBuffer } },
         { binding: 6, resource: { buffer: pmlYBuffer } },
         { binding: 7, resource: { buffer: materialBuffer } },
+        { binding: 8, resource: { buffer: flagsBuffer } },
       ],
     })
     hBindGroup = device.createBindGroup({
@@ -218,7 +229,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: { buffer: ezxBuffer } },
         { binding: 2, resource: { buffer: ezyBuffer } },
-        { binding: 2 + 1, resource: { buffer: materialBuffer } },
+        { binding: 3, resource: { buffer: materialBuffer } },
+        { binding: 4, resource: { buffer: flagsBuffer } },
       ],
     })
 
@@ -275,8 +287,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     device.queue.submit([encoder.finish()])
   }
 
-  function paint(gridX: number, gridY: number, brushRadius: number, material: number) {
-    if (!materialGrid) return
+  function paint(gridX: number, gridY: number, brushRadius: number, brush: BrushSpec) {
+    if (!epsSigGrid || !flagsGrid) return
     const W = fieldW
     const H = fieldH
     const r = Math.max(0, Math.floor(brushRadius))
@@ -285,32 +297,64 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     const xMax = Math.min(W - PML_THICKNESS - 1, gridX + r)
     const yMin = Math.max(PML_THICKNESS, gridY - r)
     const yMax = Math.min(H - PML_THICKNESS - 1, gridY + r)
+    const er = brush.epsilonR
+    const sg = brush.sigma
+    const fl = brush.pec ? FLAG_PEC : 0
     for (let j = yMin; j <= yMax; j++) {
+      const row = j * W
       for (let i = xMin; i <= xMax; i++) {
         const dx = i - gridX
         const dy = j - gridY
         if (dx * dx + dy * dy <= r2) {
-          materialGrid[j * W + i] = material
+          const k = row + i
+          epsSigGrid[2 * k] = er
+          epsSigGrid[2 * k + 1] = sg
+          flagsGrid[k] = fl
         }
       }
     }
     uploadMaterials()
   }
 
-  function clearMaterials() {
-    if (!materialGrid) return
-    materialGrid.fill(0)
+  function resetMaterials() {
+    if (!epsSigGrid || !flagsGrid) return
+    const cells = fieldW * fieldH
+    for (let k = 0; k < cells; k++) {
+      epsSigGrid[2 * k] = 1.0
+      epsSigGrid[2 * k + 1] = 0
+    }
+    flagsGrid.fill(0)
     uploadMaterials()
   }
 
-  function snapshotMaterials(): Uint32Array {
-    if (!materialGrid) return new Uint32Array(0)
-    return new Uint32Array(materialGrid)
+  function resetFields() {
+    if (!ezxBuffer || !ezyBuffer || !hxBuffer || !hyBuffer) return
+    const zeros = new Float32Array(fieldW * fieldH)
+    device.queue.writeBuffer(ezxBuffer, 0, zeros)
+    device.queue.writeBuffer(ezyBuffer, 0, zeros)
+    device.queue.writeBuffer(hxBuffer, 0, zeros)
+    device.queue.writeBuffer(hyBuffer, 0, zeros)
+    stepCount = 0
   }
 
-  function restoreMaterials(snapshot: Uint32Array) {
-    if (!materialGrid || snapshot.length !== materialGrid.length) return
-    materialGrid.set(snapshot)
+  function snapshotMaterials(): MaterialSnapshot {
+    if (!epsSigGrid || !flagsGrid) {
+      return {
+        epsSig: new Float32Array(0),
+        flags: new Uint32Array(0),
+      }
+    }
+    return {
+      epsSig: new Float32Array(epsSigGrid),
+      flags: new Uint32Array(flagsGrid),
+    }
+  }
+
+  function restoreMaterials(snapshot: MaterialSnapshot) {
+    if (!epsSigGrid || !flagsGrid) return
+    if (snapshot.epsSig.length !== epsSigGrid.length) return
+    epsSigGrid.set(snapshot.epsSig)
+    flagsGrid.set(snapshot.flags)
     uploadMaterials()
   }
 
@@ -326,6 +370,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     pmlXBuffer?.destroy()
     pmlYBuffer?.destroy()
     materialBuffer?.destroy()
+    flagsBuffer?.destroy()
     uniformBuffer.destroy()
   }
 
@@ -334,7 +379,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     step,
     destroy,
     paint,
-    clearMaterials,
+    resetMaterials,
+    resetFields,
     snapshotMaterials,
     restoreMaterials,
     getDims,

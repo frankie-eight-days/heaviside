@@ -74,7 +74,7 @@
   box-shadow: 0 0 0 1px #ffffff10;
 }
 
-.brush-slider {
+.param-slider {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -82,13 +82,13 @@
   color: #ccc;
 }
 
-.brush-slider input[type='range'] {
+.param-slider input[type='range'] {
   width: 120px;
   accent-color: #6a8aaa;
 }
 
-.brush-value {
-  min-width: 22px;
+.param-value {
+  min-width: 32px;
   text-align: right;
   font-variant-numeric: tabular-nums;
   color: #888;
