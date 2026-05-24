@@ -50,10 +50,9 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
   return out;
 }
 
-// Display gains match TMz: in our normalized FDTD units (μ_r = 1, ε_0 implicit),
-// vacuum wave impedance is 1, so Hz amplitude ≈ |E| amplitude for the same
-// source drive. Tune if the signed-Hz view ends up dim in practice.
-const DISPLAY_GAIN: f32 = 3.0;
+// Display gains match TMz (sqrt(|v|) × DISPLAY_GAIN). Bumped 3 → 6 with the
+// 2D-Ez change so the signed views read consistently across engines.
+const DISPLAY_GAIN: f32 = 6.0;
 const MAG_GAIN: f32 = 1.6;
 
 fn material_bg(er: f32, s: f32, pec: bool) -> vec3<f32> {

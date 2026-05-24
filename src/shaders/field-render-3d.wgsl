@@ -57,7 +57,7 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
   return out;
 }
 
-const DISPLAY_GAIN: f32 = 3.0;
+const DISPLAY_GAIN: f32 = 6.0;
 const MAG_GAIN: f32 = 1.6;
 
 fn heat_color(v: f32) -> vec3<f32> {

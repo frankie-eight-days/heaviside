@@ -50,7 +50,9 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
   return out;
 }
 
-const DISPLAY_GAIN: f32 = 3.0;
+// Display gain on top of sqrt(|v|) nonlinearity. Bumped from 3 → 6 after
+// user testing — far-field rings were visible but dim.
+const DISPLAY_GAIN: f32 = 6.0;
 const MAG_GAIN: f32 = 1.6;
 
 fn material_bg(er: f32, s: f32, pec: bool) -> vec3<f32> {
