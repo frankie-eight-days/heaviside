@@ -1,6 +1,6 @@
 // Field renderer — instantaneous Ez (red/blue) or time-averaged magnitude
-// envelope (heat ramp). Overlays material tint and a cyan ring at every
-// source position (iterates the sources buffer).
+// envelope (heat ramp). Overlays material tint, cyan source-position rings,
+// and white probe-position rings.
 
 struct Uniforms {
   size: vec2<u32>,
@@ -8,7 +8,12 @@ struct Uniforms {
   pml_thickness: u32,
   sc: f32,
   view_mode: u32,
-  _pad: vec2<u32>,
+  probe_count: u32,
+  history_head: u32,
+  history_len: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 };
 
 struct Source {
@@ -28,6 +33,7 @@ const VIEW_MAG: u32 = 1u;
 @group(0) @binding(4) var<storage, read> flags: array<u32>;
 @group(0) @binding(5) var<storage, read> env: array<f32>;
 @group(0) @binding(6) var<storage, read> sources: array<Source>;
+@group(0) @binding(7) var<storage, read> probes: array<vec2<u32>>;
 
 struct VsOut {
   @builtin(position) pos: vec4<f32>,
@@ -63,8 +69,6 @@ fn heat_color(v: f32) -> vec3<f32> {
   );
 }
 
-// Cyan ring at Chebyshev distance 3-4 from any source. Returns true if this
-// pixel is on a marker — caller short-circuits to the marker color.
 fn is_source_marker(i: u32, j: u32) -> bool {
   let n = u.source_count;
   for (var s = 0u; s < n; s = s + 1u) {
@@ -77,6 +81,21 @@ fn is_source_marker(i: u32, j: u32) -> bool {
     }
   }
   return false;
+}
+
+// Probe palette — kept in sync with PROBE_COLORS in MeasurementPanel.tsx so
+// the canvas marker matches the plot trace.
+fn probe_color(index: u32) -> vec3<f32> {
+  switch (index % 8u) {
+    case 0u: { return vec3<f32>(0.40, 0.76, 1.00); }
+    case 1u: { return vec3<f32>(0.61, 0.88, 0.40); }
+    case 2u: { return vec3<f32>(1.00, 0.42, 0.66); }
+    case 3u: { return vec3<f32>(1.00, 0.67, 0.27); }
+    case 4u: { return vec3<f32>(1.00, 0.92, 0.33); }
+    case 5u: { return vec3<f32>(0.73, 0.53, 1.00); }
+    case 6u: { return vec3<f32>(0.73, 0.92, 0.33); }
+    default: { return vec3<f32>(0.87, 0.87, 0.93); }
+  }
 }
 
 @fragment
@@ -106,6 +125,17 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     result = clamp(bg + field, vec3<f32>(0.0), vec3<f32>(1.0));
   }
 
+  // Probe markers — colored ring per probe, color matches MeasurementPanel.
+  let pn = u.probe_count;
+  for (var p = 0u; p < pn; p = p + 1u) {
+    let pos = probes[p];
+    let dx = i32(i) - i32(pos.x);
+    let dy = i32(j) - i32(pos.y);
+    let d2 = dx * dx + dy * dy;
+    if (d2 >= 9 && d2 <= 20) {
+      return vec4<f32>(probe_color(p), 1.0);
+    }
+  }
   if (is_source_marker(i, j)) {
     return vec4<f32>(0.0, 0.85, 1.0, 1.0);
   }

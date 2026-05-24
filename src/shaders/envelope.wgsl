@@ -9,7 +9,12 @@ struct Uniforms {
   pml_thickness: u32,
   sc: f32,
   view_mode: u32,
-  _pad: vec2<u32>,
+  probe_count: u32,
+  history_head: u32,
+  history_len: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 };
 
 const DECAY: f32 = 0.997;

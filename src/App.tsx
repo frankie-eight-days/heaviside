@@ -4,10 +4,18 @@ import Toolbar, {
   MAT_PEC,
   MAT_MATERIAL,
   MAT_SOURCE,
+  MAT_PROBE,
   type MaterialPreset,
 } from './components/Toolbar'
 import ExamplesSidebar from './components/ExamplesSidebar'
-import { dfToSigma, type BrushSpec, type SourceMode, type ViewMode } from './gpu/fdtd'
+import MeasurementPanel from './components/MeasurementPanel'
+import {
+  dfToSigma,
+  type BrushSpec,
+  type ProbeSpec,
+  type SourceMode,
+  type ViewMode,
+} from './gpu/fdtd'
 import { ALL_SCENES, type Scene } from './scenes'
 import './App.css'
 
@@ -21,9 +29,11 @@ export default function App() {
   const [viewMode, setViewMode] = useState<ViewMode>('ez')
   const [canUndo, setCanUndo] = useState(false)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null)
+  const [probes, setProbes] = useState<ProbeSpec[]>([])
   const canvasHandle = useRef<GPUCanvasHandle | null>(null)
 
-  const tool: Tool = material === MAT_SOURCE ? 'source' : 'paint'
+  const tool: Tool =
+    material === MAT_SOURCE ? 'source' : material === MAT_PROBE ? 'probe' : 'paint'
 
   const brush = useMemo<BrushSpec>(() => {
     if (material === MAT_PEC) return { epsilonR: 1, sigma: 0, pec: true }
@@ -53,6 +63,21 @@ export default function App() {
 
   const handleFirePulse = useCallback(() => {
     canvasHandle.current?.firePulse()
+  }, [])
+
+  const handleProbePlaced = useCallback((x: number, y: number) => {
+    setProbes((prev) => {
+      if (prev.length >= 8) return prev
+      return [...prev, { x, y }]
+    })
+  }, [])
+
+  const handleRemoveProbe = useCallback((index: number) => {
+    setProbes((prev) => prev.filter((_, i) => i !== index))
+  }, [])
+
+  const handleClearProbes = useCallback(() => {
+    setProbes([])
   }, [])
 
   const handleSceneSelect = useCallback((scene: Scene) => {
@@ -88,7 +113,8 @@ export default function App() {
       <header className="header">
         <h1>EM Playground</h1>
         <span className="subtitle">
-          Paint materials, place sources, load examples. Magnitude view shows radiation patterns.
+          Paint materials, place sources and probes. Magnitude shows radiation
+          patterns. Probes feed the spectrum analyzer on the right.
         </span>
       </header>
       <ExamplesSidebar
@@ -127,9 +153,18 @@ export default function App() {
           sourcePeriod={sourcePeriod}
           sourceMode={sourceMode}
           viewMode={viewMode}
+          probes={probes}
+          onProbePlaced={handleProbePlaced}
           onUndoStackChange={setCanUndo}
         />
       </main>
+      <MeasurementPanel
+        probes={probes}
+        sourcePeriod={sourcePeriod}
+        canvasHandle={canvasHandle}
+        onRemoveProbe={handleRemoveProbe}
+        onClearProbes={handleClearProbes}
+      />
     </div>
   )
 }

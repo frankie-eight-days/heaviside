@@ -4,6 +4,7 @@ export const MAT_VACUUM = 0
 export const MAT_PEC = 1
 export const MAT_MATERIAL = 2
 export const MAT_SOURCE = 3
+export const MAT_PROBE = 4
 
 interface MaterialOption {
   id: number
@@ -24,6 +25,9 @@ const TIP_DF =
 const TIP_SOURCE =
   'Place a source: click anywhere on the canvas to move the source to that cell. The yellow marker shows the current position. Combine with Pulse mode to fire a clean wavefront.'
 
+const TIP_PROBE =
+  'Place a probe: click on the canvas to drop a probe. Probes sample Ez every timestep — see the time waveform and FFT spectrum in the right panel. Up to 8 probes.'
+
 const TIP_WAVELENGTH =
   'Wavelength in vacuum, measured in grid cells. Smaller wavelength = higher frequency. With Material painted nearby, the wavelength inside it shrinks by √Dk.'
 
@@ -35,6 +39,7 @@ const MATERIALS: MaterialOption[] = [
   { id: MAT_PEC, label: 'PEC', swatch: '#bdbdc2', title: TIP_PEC },
   { id: MAT_MATERIAL, label: 'Material', swatch: '#2f5a93' },
   { id: MAT_SOURCE, label: 'Source', swatch: '#ffd633', title: TIP_SOURCE },
+  { id: MAT_PROBE, label: 'Probe', swatch: '#ffffff', title: TIP_PROBE },
 ]
 
 export interface MaterialPreset {

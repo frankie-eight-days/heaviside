@@ -1,7 +1,7 @@
 // PML-aware Yee E-update with per-cell ε, σ and a PEC flag bit.
 //
 // Sources are applied by a separate compute pass (source-apply.wgsl) that
-// runs after this one. This shader has no knowledge of sources.
+// runs after this one. This shader has no knowledge of sources or probes.
 
 struct Uniforms {
   size: vec2<u32>,
@@ -9,7 +9,12 @@ struct Uniforms {
   pml_thickness: u32,
   sc: f32,
   view_mode: u32,
-  _pad: vec2<u32>,
+  probe_count: u32,
+  history_head: u32,
+  history_len: u32,
+  _pad0: u32,
+  _pad1: u32,
+  _pad2: u32,
 };
 
 const FLAG_PEC: u32 = 1u;

@@ -2,6 +2,7 @@ import eShaderSrc from '../shaders/fdtd-e.wgsl?raw'
 import hShaderSrc from '../shaders/fdtd-h.wgsl?raw'
 import envShaderSrc from '../shaders/envelope.wgsl?raw'
 import sourceApplyShaderSrc from '../shaders/source-apply.wgsl?raw'
+import probeSampleShaderSrc from '../shaders/probe-sample.wgsl?raw'
 import renderShaderSrc from '../shaders/field-render.wgsl?raw'
 import type { GPUContext } from './init'
 
@@ -17,6 +18,10 @@ const STEPS_PER_FRAME = 4
 // size and the source-apply workgroup count. See ADR 0006. 128 lets the PCB
 // scenes use port columns spanning a substrate gap without silent clamping.
 export const MAX_SOURCES = 128
+
+// Probe storage limits. See ADR 0008. 1024 samples × 240 sample/s = ~4 s window.
+export const MAX_PROBES = 8
+export const PROBE_HISTORY_LEN = 1024
 
 export function dfToSigma(dk: number, df: number): number {
   return ((2 * Math.PI) / REFERENCE_PERIOD) * dk * df / SC
@@ -39,6 +44,21 @@ export interface SourceSpec {
   y: number
   phase: number
   amplitude: number
+}
+
+export interface ProbeSpec {
+  x: number
+  y: number
+}
+
+export interface ProbeHistorySnapshot {
+  // Flat MAX_PROBES × PROBE_HISTORY_LEN array. Slot p · PROBE_HISTORY_LEN + i
+  // holds sample i for probe p. Sample at offset `head` is the oldest;
+  // `head − 1` (mod PROBE_HISTORY_LEN) is the newest.
+  shadow: Float32Array
+  head: number
+  historyLen: number
+  probeCount: number
 }
 
 export interface BrushSpec {
@@ -66,6 +86,8 @@ export interface FDTDEngine {
   setSourceMode: (mode: SourceMode) => void
   firePulse: () => void
   setViewMode: (mode: ViewMode) => void
+  setProbes: (probes: ProbeSpec[]) => void
+  getProbeHistory: () => ProbeHistorySnapshot
   snapshotMaterials: () => MaterialSnapshot
   restoreMaterials: (snapshot: MaterialSnapshot) => void
   getDims: () => { width: number; height: number }
@@ -116,23 +138,27 @@ function buildPMLAxis(len: number): Float32Array {
 export function createFDTD(gpu: GPUContext): FDTDEngine {
   const { device, context, format } = gpu
 
-  // Uniforms layout (32 bytes) — must match the WGSL struct in every shader.
+  // Uniforms layout (48 bytes) — must match the WGSL struct in every shader.
   //   0: size: vec2<u32>           (W, H)
   //   8: source_count: u32
   //  12: pml_thickness: u32
   //  16: sc: f32
   //  20: view_mode: u32
-  //  24: _pad: vec2<u32>
+  //  24: probe_count: u32
+  //  28: history_head: u32
+  //  32: history_len: u32
+  //  36: _pad × 3 u32
   const uniformBuffer = device.createBuffer({
-    size: 32,
+    size: 48,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   })
-  const uniformBytes = new ArrayBuffer(32)
+  const uniformBytes = new ArrayBuffer(48)
   const uniformU32 = new Uint32Array(uniformBytes)
   const uniformF32 = new Float32Array(uniformBytes)
   uniformU32[3] = PML_THICKNESS
   uniformF32[4] = SC
   uniformU32[5] = 0 // view_mode = Ez by default
+  uniformU32[8] = PROBE_HISTORY_LEN
 
   function writeUniforms() {
     device.queue.writeBuffer(uniformBuffer, 0, uniformBytes)
@@ -146,6 +172,29 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   const sourcesBytes = new ArrayBuffer(MAX_SOURCES * 16)
   const sourcesU32 = new Uint32Array(sourcesBytes)
   const sourcesF32 = new Float32Array(sourcesBytes)
+
+  // Probes buffer: MAX_PROBES × 8 bytes (vec2<u32>). Allocated once.
+  const probesBuffer = device.createBuffer({
+    size: MAX_PROBES * 8,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+  const probesBytes = new ArrayBuffer(MAX_PROBES * 8)
+  const probesU32 = new Uint32Array(probesBytes)
+
+  // History buffer: MAX_PROBES × PROBE_HISTORY_LEN × 4 bytes. GPU side; written
+  // by probe-sample, copied to staging each frame for CPU readback.
+  const HISTORY_BYTES = MAX_PROBES * PROBE_HISTORY_LEN * 4
+  const historyBuffer = device.createBuffer({
+    size: HISTORY_BYTES,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+  })
+  const probeStagingBuffer = device.createBuffer({
+    size: HISTORY_BYTES,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  })
+  const probeHistoryShadow = new Float32Array(MAX_PROBES * PROBE_HISTORY_LEN)
+  type ReadbackState = 'idle' | 'in-flight'
+  let probeReadbackState: ReadbackState = 'idle'
 
   const ePipeline = device.createComputePipeline({
     layout: 'auto',
@@ -172,6 +221,13 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     layout: 'auto',
     compute: {
       module: device.createShaderModule({ code: envShaderSrc }),
+      entryPoint: 'main',
+    },
+  })
+  const probeSamplePipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: device.createShaderModule({ code: probeSampleShaderSrc }),
       entryPoint: 'main',
     },
   })
@@ -202,6 +258,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   let hBindGroup: GPUBindGroup | null = null
   let sourceApplyBindGroup: GPUBindGroup | null = null
   let envBindGroup: GPUBindGroup | null = null
+  let probeSampleBindGroup: GPUBindGroup | null = null
   let renderBindGroup: GPUBindGroup | null = null
   let fieldW = 0
   let fieldH = 0
@@ -211,6 +268,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   let sourceMode: SourceMode = 'cw'
   let pulseT0 = -1
   let sources: SourceSpec[] = []
+  let probes: ProbeSpec[] = []
+  let probeHistoryHead = 0
 
   function uploadMaterials() {
     if (!materialBuffer || !flagsBuffer) return
@@ -308,6 +367,16 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         { binding: 3, resource: { buffer: envBuffer } },
       ],
     })
+    probeSampleBindGroup = device.createBindGroup({
+      layout: probeSamplePipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: { buffer: probesBuffer } },
+        { binding: 2, resource: { buffer: ezxBuffer } },
+        { binding: 3, resource: { buffer: ezyBuffer } },
+        { binding: 4, resource: { buffer: historyBuffer } },
+      ],
+    })
     renderBindGroup = device.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),
       entries: [
@@ -318,6 +387,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         { binding: 4, resource: { buffer: flagsBuffer } },
         { binding: 5, resource: { buffer: envBuffer } },
         { binding: 6, resource: { buffer: sourcesBuffer } },
+        { binding: 7, resource: { buffer: probesBuffer } },
       ],
     })
 
@@ -330,6 +400,16 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     sources = [{ x: Math.floor(w / 2), y: Math.floor(h / 2), phase: 0, amplitude: 1 }]
     uniformU32[2] = sources.length
     writeUniforms()
+    writeSources()
+
+    // Clear probe history on resize (positions are now stale anyway).
+    probes = []
+    probeHistoryHead = 0
+    probeHistoryShadow.fill(0)
+    uniformU32[6] = 0
+    uniformU32[7] = 0
+    writeUniforms()
+    device.queue.writeBuffer(historyBuffer, 0, new Float32Array(MAX_PROBES * PROBE_HISTORY_LEN))
   }
 
   function evaluateSource(spec: SourceSpec): number {
@@ -356,12 +436,34 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     device.queue.writeBuffer(sourcesBuffer, 0, sourcesBytes)
   }
 
+  function tryStartProbeReadback() {
+    if (probes.length === 0 || probeReadbackState !== 'idle') return
+    const encoder = device.createCommandEncoder()
+    encoder.copyBufferToBuffer(historyBuffer, 0, probeStagingBuffer, 0, HISTORY_BYTES)
+    device.queue.submit([encoder.finish()])
+    probeReadbackState = 'in-flight'
+    probeStagingBuffer
+      .mapAsync(GPUMapMode.READ)
+      .then(() => {
+        const view = new Float32Array(probeStagingBuffer.getMappedRange())
+        probeHistoryShadow.set(view)
+        probeStagingBuffer.unmap()
+        probeReadbackState = 'idle'
+      })
+      .catch((err) => {
+        // Surface mapping failures but don't crash the loop — next frame retries.
+        console.error('probe readback mapAsync failed', err)
+        probeReadbackState = 'idle'
+      })
+  }
+
   function step() {
     if (
       !eBindGroup ||
       !hBindGroup ||
       !sourceApplyBindGroup ||
       !envBindGroup ||
+      !probeSampleBindGroup ||
       !renderBindGroup
     ) {
       return
@@ -376,6 +478,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         const dt = (stepCount - pulseT0) / sourcePeriod
         if (dt > 5) pulseT0 = -1
       }
+      // Update history head BEFORE writing uniforms so the probe-sample pass
+      // sees the slot it should write to.
+      uniformU32[7] = probeHistoryHead
+      writeUniforms()
       writeSources()
 
       const encoder = device.createCommandEncoder()
@@ -406,8 +512,17 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       envPass.dispatchWorkgroups(workgroupsX, workgroupsY)
       envPass.end()
 
+      if (probes.length > 0) {
+        const probePass = encoder.beginComputePass()
+        probePass.setPipeline(probeSamplePipeline)
+        probePass.setBindGroup(0, probeSampleBindGroup)
+        probePass.dispatchWorkgroups(1)
+        probePass.end()
+      }
+
       device.queue.submit([encoder.finish()])
       stepCount++
+      probeHistoryHead = (probeHistoryHead + 1) % PROBE_HISTORY_LEN
     }
 
     const encoder = device.createCommandEncoder()
@@ -426,6 +541,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     renderPass.draw(3)
     renderPass.end()
     device.queue.submit([encoder.finish()])
+
+    tryStartProbeReadback()
   }
 
   function paint(gridX: number, gridY: number, brushRadius: number, brush: BrushSpec) {
@@ -537,6 +654,37 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     writeUniforms()
   }
 
+  function setProbes(specs: ProbeSpec[]) {
+    probes = specs.slice(0, MAX_PROBES).map((p) => ({
+      x: Math.max(0, Math.min(fieldW - 1, Math.floor(p.x))),
+      y: Math.max(0, Math.min(fieldH - 1, Math.floor(p.y))),
+    }))
+    // Pack positions into the storage buffer.
+    new Uint8Array(probesBytes).fill(0)
+    for (let i = 0; i < probes.length; i++) {
+      probesU32[2 * i + 0] = probes[i].x
+      probesU32[2 * i + 1] = probes[i].y
+    }
+    device.queue.writeBuffer(probesBuffer, 0, probesBytes)
+    // Reset history when probe list changes so old probes' samples don't
+    // bleed into the new probes' slots.
+    probeHistoryHead = 0
+    probeHistoryShadow.fill(0)
+    device.queue.writeBuffer(historyBuffer, 0, new Float32Array(MAX_PROBES * PROBE_HISTORY_LEN))
+    uniformU32[6] = probes.length
+    uniformU32[7] = 0
+    writeUniforms()
+  }
+
+  function getProbeHistory(): ProbeHistorySnapshot {
+    return {
+      shadow: probeHistoryShadow,
+      head: probeHistoryHead,
+      historyLen: PROBE_HISTORY_LEN,
+      probeCount: probes.length,
+    }
+  }
+
   function snapshotMaterials(): MaterialSnapshot {
     if (!epsSigGrid || !flagsGrid) {
       return {
@@ -573,6 +721,9 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     flagsBuffer?.destroy()
     envBuffer?.destroy()
     sourcesBuffer.destroy()
+    probesBuffer.destroy()
+    historyBuffer.destroy()
+    probeStagingBuffer.destroy()
     uniformBuffer.destroy()
   }
 
@@ -590,6 +741,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     setSourceMode,
     firePulse,
     setViewMode,
+    setProbes,
+    getProbeHistory,
     snapshotMaterials,
     restoreMaterials,
     getDims,

@@ -45,7 +45,10 @@ Compute-then-render per frame: H pass → E pass → envelope pass (per FDTD sub
 - [x] **M4 — Material grid.** Per-cell `ε` and `σ` as continuous fields plus a PEC flag bit. Four-button brush palette (Vacuum / PEC / Lossy / Dielectric) with contextual εr or σ slider that adjusts the brush before each stroke. Reset fields and Reset materials are separate actions.
 - [x] **M5a — Interactive point source + magnitude view.** Click to place the source. Wavelength slider. Off / CW / Pulse modulation with a Fire button (also bound to space). Ez ⇄ Magnitude view toggle; magnitude is a peak-with-decay EMA in its own compute pass, rendered with a black→red→yellow→white heat ramp.
 - [ ] **M6 — Examples library + multi-source.** Two-pane app shell: Examples sidebar (left, categorized — Antennas, PCB) + Canvas+Toolbar (right). One-click scene loader sets source(s), wavelength, source mode, and paints PEC/materials. Multi-source primitive (small sources buffer, max ~8, each with position + phase + amplitude) enabling differential pairs and antenna arrays. "Port" source — a multi-cell driver across a gap — bridges electrical-circuit thinking to the EM domain. Initial scenes: 4–5 antennas (Hertzian, λ/2 dipole, corner reflector, parabolic reflector, 2-element broadside array) + 3–4 PCB structures (microstrip, stripline, edge-coupled differential pair).
-- [ ] **M7 — Measurement instrument.** Right-side panel becomes the readout. Waveform sources (sine / square / triangle / AM / FM, plus rise-time for digital signals). Probe points (click to drop) with time-series + FFT plots. VSWR display along painted transmission lines. S11 / reflection coefficient via FFT of probe data, with optional reference-run de-embedding.
+- [~] **M7a — Probes + spectrum analyzer.** Probe primitive (click to drop, max 8), GPU ring-buffer history (1024 samples per probe), async readback via mapAsync. Right-panel `MeasurementPanel` shows the selected probe's time waveform and FFT magnitude spectrum, live-updated every frame. Hand-rolled radix-2 FFT, no deps.
+- [ ] **M7b — VSWR + multi-probe analysis.** Probe-line primitive (a series of probes along a straight line) with VSWR readout = max/min `|Ez|` along the line. Per-probe RMS / peak / SWR display. Compare-two-probes overlay.
+- [ ] **M7c — Waveform generators.** Source modulation expands to sine / square / triangle / AM / FM / arbitrary, with a rise-time slider for digital. Toolbar gets a waveform picker.
+- [ ] **M7d — S-parameters.** Reference-run de-embedding (run scene with matched load, store incident wave, subtract from total to get reflected). S11 magnitude + phase plot. Optional dB scale on the spectrum analyzer.
 - [ ] **M8 — Plane wave excitation** (formerly M5b). TF/SF boundary or driven-row plane wave. Unlocks scattering / single-slit diffraction / frequency-selective surface demos.
 - [ ] **M9 — 3D FDTD** (formerly M7). Extend to 3D. Volume rendering with slice planes. Near-to-far-field transforms for quantitative radiation patterns.
 
@@ -58,11 +61,10 @@ Current ADRs:
 - [0002 — 2D FDTD, TMz polarization first](docs/decisions/0002-2d-fdtd-tmz-first.md)
 - [0003 — Per-cell ε and σ as continuous fields, PEC as a flag](docs/decisions/0003-per-cell-eps-sigma.md)
 - [0004 — Interactive point source + EMA magnitude view](docs/decisions/0004-interactive-sources-and-magnitude.md)
-
-Planned ADRs (M6):
-- 0005 — App layout: examples-on-left, right panel reserved for measurements (M7).
-- 0006 — Multi-source primitive: separate compute pass that writes source values into Ez (keeps the E shader under the 8-storage-buffer limit) and supports a "port" primitive that drives a multi-cell column for transmission-line excitation.
-- 0007 — Scene format: scenes are TypeScript modules exporting an `apply(engine, dims) → void` function plus metadata. Imperative rather than declarative so scenes can compute geometry from current grid dimensions (e.g. λ/2 dipole sized in cells).
+- [0005 — App layout: examples sidebar + reserved measurement column](docs/decisions/0005-app-layout.md)
+- [0006 — Multi-source primitive via a separate compute pass](docs/decisions/0006-multi-source-primitive.md)
+- [0007 — Scenes as TypeScript modules with imperative apply](docs/decisions/0007-scene-format.md)
+- [0008 — Probe primitive: GPU ring buffer + mapAsync readback](docs/decisions/0008-probe-primitive.md)
 
 ## Dev
 

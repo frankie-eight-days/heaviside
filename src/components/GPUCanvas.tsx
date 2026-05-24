@@ -5,6 +5,8 @@ import {
   type BrushSpec,
   type FDTDEngine,
   type MaterialSnapshot,
+  type ProbeHistorySnapshot,
+  type ProbeSpec,
   type SourceMode,
   type ViewMode,
 } from '../gpu/fdtd'
@@ -12,7 +14,7 @@ import type { Scene, SceneConfig } from '../scenes/types'
 
 const MAX_UNDO = 10
 
-export type Tool = 'paint' | 'source'
+export type Tool = 'paint' | 'source' | 'probe'
 
 export interface GPUCanvasHandle {
   undo: () => void
@@ -20,6 +22,7 @@ export interface GPUCanvasHandle {
   resetFields: () => void
   firePulse: () => void
   applyScene: (scene: Scene) => SceneConfig | null
+  getProbeHistory: () => ProbeHistorySnapshot | null
   canUndo: () => boolean
 }
 
@@ -30,6 +33,8 @@ interface GPUCanvasProps {
   sourcePeriod: number
   sourceMode: SourceMode
   viewMode: ViewMode
+  probes: ProbeSpec[]
+  onProbePlaced: (gridX: number, gridY: number) => void
   onUndoStackChange: (canUndo: boolean) => void
 }
 
@@ -41,6 +46,8 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     sourcePeriod,
     sourceMode,
     viewMode,
+    probes,
+    onProbePlaced,
     onUndoStackChange,
   },
   ref,
@@ -72,6 +79,9 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   useEffect(() => {
     engineRef.current?.setViewMode(viewMode)
   }, [viewMode])
+  useEffect(() => {
+    engineRef.current?.setProbes(probes)
+  }, [probes])
 
   useImperativeHandle(ref, () => ({
     undo: () => {
@@ -106,6 +116,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
       onUndoStackChange(false)
       return scene.apply(engine, dims)
     },
+    getProbeHistory: () => engineRef.current?.getProbeHistory() ?? null,
     canUndo: () => undoStackRef.current.length > 0,
   }))
 
@@ -146,6 +157,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
         engine.setSourcePeriod(sourcePeriod)
         engine.setSourceMode(sourceMode)
         engine.setViewMode(viewMode)
+        engine.setProbes(probes)
         engineRef.current = engine
 
         const tick = () => {
@@ -192,6 +204,10 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     if (!g) return
     if (toolRef.current === 'source') {
       engine.placeSource(g[0], g[1])
+      return
+    }
+    if (toolRef.current === 'probe') {
+      onProbePlaced(g[0], g[1])
       return
     }
     e.currentTarget.setPointerCapture(e.pointerId)
