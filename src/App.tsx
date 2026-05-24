@@ -101,6 +101,7 @@ export default function App() {
       setSourcePeriod(cfg.sourcePeriod)
       setSourceMode(cfg.sourceMode)
       setViewMode(cfg.viewMode)
+      setProbes(cfg.probes ?? [])
     }
     setActiveSceneId(scene.id)
   }, [])
