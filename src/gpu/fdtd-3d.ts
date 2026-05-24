@@ -34,12 +34,57 @@ const REFERENCE_PERIOD = 80
 // slice render is cheap, the compute passes are the cost.
 const STEPS_PER_FRAME = 1
 
-// Default 128³ for M9a smoke tests — fits easily in any GPU and ~6× faster
-// to alloc/clear than 256³. ADR 0010 calls for 256³ as the "user-facing"
+// Default 128³ for M9a/b. ADR 0010 calls for 256³ as the "user-facing"
 // default; we'll surface a resolution control in M9d.
 const DEFAULT_DIM = 128
 
 const SOURCE_STRIDE_BYTES = 32
+
+// Simplified CPML — σ-only (no κ stretching, no α complex-frequency shift).
+// 12-cell absorber matches the 2D PML thickness; reflection target R≈1e-6.
+// See ADR 0010 for the trade-off vs Berenger split-field.
+const PML_THICKNESS_3D = 12
+const PML_ORDER_3D = 3
+const PML_TARGET_R_3D = 1e-6
+const SIGMA_MAX_3D =
+  (-(PML_ORDER_3D + 1) * Math.log(PML_TARGET_R_3D)) / (2 * PML_THICKNESS_3D)
+
+function sigmaAt3D(position: number, axisLen: number): number {
+  if (position < PML_THICKNESS_3D) {
+    const depth = PML_THICKNESS_3D - position
+    return SIGMA_MAX_3D * Math.pow(depth / PML_THICKNESS_3D, PML_ORDER_3D)
+  }
+  if (position > axisLen - 1 - PML_THICKNESS_3D) {
+    const depth = position - (axisLen - 1 - PML_THICKNESS_3D)
+    return SIGMA_MAX_3D * Math.pow(depth / PML_THICKNESS_3D, PML_ORDER_3D)
+  }
+  return 0
+}
+
+// CPML recurrence coefficients for the ψ memory variable.
+//   b = exp(-σ · Sc)
+//   a = b - 1   (negative — multiplies the curl term in the ψ recurrence)
+// When σ = 0 (outside PML) we return b=1, a=0 so ψ becomes a pass-through.
+function cpmlCoeffs3D(sigma: number): [number, number] {
+  if (sigma < 1e-12) return [1, 0]
+  const b = Math.exp(-sigma * SC_3D)
+  return [b, b - 1]
+}
+
+// Per-axis vec4 packs E-position and H-position coefficients:
+//   .x = b_E, .y = a_E, .z = b_H, .w = a_H
+function buildCpmlAxis3D(len: number): Float32Array {
+  const out = new Float32Array(len * 4)
+  for (let i = 0; i < len; i++) {
+    const [bE, aE] = cpmlCoeffs3D(sigmaAt3D(i, len))
+    const [bH, aH] = cpmlCoeffs3D(sigmaAt3D(i + 0.5, len))
+    out[4 * i + 0] = bE
+    out[4 * i + 1] = aE
+    out[4 * i + 2] = bH
+    out[4 * i + 3] = aH
+  }
+  return out
+}
 
 const DEFAULT_MOD: ModulationParams = {
   modPeriod: 400,
@@ -87,7 +132,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   uniformU32[2] = D
   // [3] padding
   uniformU32[4] = 0 // source_count
-  uniformU32[5] = 0 // pml_thickness (M9b)
+  uniformU32[5] = PML_THICKNESS_3D
   uniformF32[6] = SC_3D
   uniformU32[7] = 0 // view_axis = XY
   uniformU32[8] = Math.floor(D / 2) // view_depth at midplane
@@ -111,6 +156,41 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   const hxBuf = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
   const hyBuf = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
   const hzBuf = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+
+  // CPML ψ memory variables — 6 packed buffers (vec2<f32> per cell). One
+  // pair per field component, holding the two axis-conjugate ψ values.
+  // 128³ × 8 B = 16 MB per buffer; 6 × 16 MB = 96 MB total at default dim.
+  const psiBytes = W * H * D * 8
+  const psiExBuf = device.createBuffer({ size: psiBytes, usage: fieldUsage })
+  const psiEyBuf = device.createBuffer({ size: psiBytes, usage: fieldUsage })
+  const psiEzBuf = device.createBuffer({ size: psiBytes, usage: fieldUsage })
+  const psiHxBuf = device.createBuffer({ size: psiBytes, usage: fieldUsage })
+  const psiHyBuf = device.createBuffer({ size: psiBytes, usage: fieldUsage })
+  const psiHzBuf = device.createBuffer({ size: psiBytes, usage: fieldUsage })
+
+  // Per-axis CPML coefficient tables (vec4 per cell: b_E, a_E, b_H, a_H).
+  // Tiny — at most 4 KB per axis at the 256-cell default.
+  const pmlXData = buildCpmlAxis3D(W)
+  const pmlYData = buildCpmlAxis3D(H)
+  const pmlZData = buildCpmlAxis3D(D)
+  const pmlAxisUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+  const pmlXBuf = device.createBuffer({ size: pmlXData.byteLength, usage: pmlAxisUsage })
+  const pmlYBuf = device.createBuffer({ size: pmlYData.byteLength, usage: pmlAxisUsage })
+  const pmlZBuf = device.createBuffer({ size: pmlZData.byteLength, usage: pmlAxisUsage })
+  device.queue.writeBuffer(pmlXBuf, 0, pmlXData)
+  device.queue.writeBuffer(pmlYBuf, 0, pmlYData)
+  device.queue.writeBuffer(pmlZBuf, 0, pmlZData)
+
+  // Zero-init ψ. We reuse this oversized zero buffer for the field-reset
+  // path too — fields are W*H*D*4 bytes, ψ are W*H*D*8 bytes; a single
+  // Float32Array sized for ψ covers both via writeBuffer's offset/length.
+  const zeroPsi = new Float32Array(W * H * D * 2)
+  device.queue.writeBuffer(psiExBuf, 0, zeroPsi)
+  device.queue.writeBuffer(psiEyBuf, 0, zeroPsi)
+  device.queue.writeBuffer(psiEzBuf, 0, zeroPsi)
+  device.queue.writeBuffer(psiHxBuf, 0, zeroPsi)
+  device.queue.writeBuffer(psiHyBuf, 0, zeroPsi)
+  device.queue.writeBuffer(psiHzBuf, 0, zeroPsi)
 
   // Sources buffer — 32 B/source (vec3 pos + pol + value + 12 B pad).
   const sourcesBuffer = device.createBuffer({
@@ -166,7 +246,8 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     primitive: { topology: 'triangle-list' },
   })
 
-  // Bind groups.
+  // Bind groups — each E/H shader binds: uniform, target field, two curl-input
+  // fields, ψ pack, and the two axis PML coefficient tables.
   const exBindGroup = device.createBindGroup({
     layout: exPipeline.getBindGroupLayout(0),
     entries: [
@@ -174,6 +255,9 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 1, resource: { buffer: exBuf } },
       { binding: 2, resource: { buffer: hzBuf } },
       { binding: 3, resource: { buffer: hyBuf } },
+      { binding: 4, resource: { buffer: psiExBuf } },
+      { binding: 5, resource: { buffer: pmlYBuf } },
+      { binding: 6, resource: { buffer: pmlZBuf } },
     ],
   })
   const eyBindGroup = device.createBindGroup({
@@ -183,6 +267,9 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 1, resource: { buffer: eyBuf } },
       { binding: 2, resource: { buffer: hxBuf } },
       { binding: 3, resource: { buffer: hzBuf } },
+      { binding: 4, resource: { buffer: psiEyBuf } },
+      { binding: 5, resource: { buffer: pmlZBuf } },
+      { binding: 6, resource: { buffer: pmlXBuf } },
     ],
   })
   const ezBindGroup = device.createBindGroup({
@@ -192,6 +279,9 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 1, resource: { buffer: ezBuf } },
       { binding: 2, resource: { buffer: hyBuf } },
       { binding: 3, resource: { buffer: hxBuf } },
+      { binding: 4, resource: { buffer: psiEzBuf } },
+      { binding: 5, resource: { buffer: pmlXBuf } },
+      { binding: 6, resource: { buffer: pmlYBuf } },
     ],
   })
   const hxBindGroup = device.createBindGroup({
@@ -201,6 +291,9 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 1, resource: { buffer: hxBuf } },
       { binding: 2, resource: { buffer: eyBuf } },
       { binding: 3, resource: { buffer: ezBuf } },
+      { binding: 4, resource: { buffer: psiHxBuf } },
+      { binding: 5, resource: { buffer: pmlZBuf } },
+      { binding: 6, resource: { buffer: pmlYBuf } },
     ],
   })
   const hyBindGroup = device.createBindGroup({
@@ -210,6 +303,9 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 1, resource: { buffer: hyBuf } },
       { binding: 2, resource: { buffer: ezBuf } },
       { binding: 3, resource: { buffer: exBuf } },
+      { binding: 4, resource: { buffer: psiHyBuf } },
+      { binding: 5, resource: { buffer: pmlXBuf } },
+      { binding: 6, resource: { buffer: pmlZBuf } },
     ],
   })
   const hzBindGroup = device.createBindGroup({
@@ -219,6 +315,9 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 1, resource: { buffer: hzBuf } },
       { binding: 2, resource: { buffer: exBuf } },
       { binding: 3, resource: { buffer: eyBuf } },
+      { binding: 4, resource: { buffer: psiHzBuf } },
+      { binding: 5, resource: { buffer: pmlYBuf } },
+      { binding: 6, resource: { buffer: pmlXBuf } },
     ],
   })
   const sourceApplyBindGroup = device.createBindGroup({
@@ -390,13 +489,20 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   }
 
   function resetFields() {
-    const zeros = new Float32Array(W * H * D)
-    device.queue.writeBuffer(exBuf, 0, zeros)
-    device.queue.writeBuffer(eyBuf, 0, zeros)
-    device.queue.writeBuffer(ezBuf, 0, zeros)
-    device.queue.writeBuffer(hxBuf, 0, zeros)
-    device.queue.writeBuffer(hyBuf, 0, zeros)
-    device.queue.writeBuffer(hzBuf, 0, zeros)
+    // zeroPsi is sized for the larger ψ buffers; subarray covers fields.
+    const fieldZeros = zeroPsi.subarray(0, W * H * D)
+    device.queue.writeBuffer(exBuf, 0, fieldZeros)
+    device.queue.writeBuffer(eyBuf, 0, fieldZeros)
+    device.queue.writeBuffer(ezBuf, 0, fieldZeros)
+    device.queue.writeBuffer(hxBuf, 0, fieldZeros)
+    device.queue.writeBuffer(hyBuf, 0, fieldZeros)
+    device.queue.writeBuffer(hzBuf, 0, fieldZeros)
+    device.queue.writeBuffer(psiExBuf, 0, zeroPsi)
+    device.queue.writeBuffer(psiEyBuf, 0, zeroPsi)
+    device.queue.writeBuffer(psiEzBuf, 0, zeroPsi)
+    device.queue.writeBuffer(psiHxBuf, 0, zeroPsi)
+    device.queue.writeBuffer(psiHyBuf, 0, zeroPsi)
+    device.queue.writeBuffer(psiHzBuf, 0, zeroPsi)
     stepCount = 0
     pulseT0 = -1
   }
@@ -540,6 +646,15 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     hxBuf.destroy()
     hyBuf.destroy()
     hzBuf.destroy()
+    psiExBuf.destroy()
+    psiEyBuf.destroy()
+    psiEzBuf.destroy()
+    psiHxBuf.destroy()
+    psiHyBuf.destroy()
+    psiHzBuf.destroy()
+    pmlXBuf.destroy()
+    pmlYBuf.destroy()
+    pmlZBuf.destroy()
     sourcesBuffer.destroy()
     uniformBuffer.destroy()
   }
@@ -570,7 +685,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     snapshotMaterials,
     restoreMaterials,
     getDims,
-    pmlThickness: 0, // M9b
+    pmlThickness: PML_THICKNESS_3D,
     // 3D-specific:
     setSources3D,
     setProbes3D,

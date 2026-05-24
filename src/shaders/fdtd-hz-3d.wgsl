@@ -1,6 +1,6 @@
-// 3D FDTD Hz update — vacuum (M9a).
-//   μ ∂Hz/∂t = ∂Ex/∂y − ∂Ey/∂x
-// Hz at (i+½, j+½, k).
+// 3D FDTD Hz update with CPML (M9b).
+//   μ ∂Hz/∂t = (1/κ_y) ∂Ex/∂y − (1/κ_x) ∂Ey/∂x + ψH_z_y − ψH_z_x
+// ψ pack: .x = ψ_y, .y = ψ_x
 
 struct Uniforms {
   size: vec3<u32>,
@@ -22,6 +22,9 @@ struct Uniforms {
 @group(0) @binding(1) var<storage, read_write> hz: array<f32>;
 @group(0) @binding(2) var<storage, read> ex: array<f32>;
 @group(0) @binding(3) var<storage, read> ey: array<f32>;
+@group(0) @binding(4) var<storage, read_write> psi_hz: array<vec2<f32>>;
+@group(0) @binding(5) var<storage, read> pml_y: array<vec4<f32>>;
+@group(0) @binding(6) var<storage, read> pml_x: array<vec4<f32>>;
 
 fn idx(i: u32, j: u32, k: u32) -> u32 {
   return i + j * u.size.x + k * u.size.x * u.size.y;
@@ -36,10 +39,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let H = u.size.y;
   let D = u.size.z;
   if (i >= W || j >= H || k >= D) { return; }
-
   if (i + 1u >= W || j + 1u >= H) { return; }
 
   let curlEx = ex[idx(i, j + 1u, k)] - ex[idx(i, j, k)];
   let curlEy = ey[idx(i + 1u, j, k)] - ey[idx(i, j, k)];
-  hz[idx(i, j, k)] = hz[idx(i, j, k)] + u.sc * (curlEx - curlEy);
+
+  let py = pml_y[j];
+  let px = pml_x[i];
+
+  let cell = idx(i, j, k);
+  var psi = psi_hz[cell];
+  psi.x = py.z * psi.x + py.w * curlEx;
+  psi.y = px.z * psi.y + px.w * curlEy;
+  psi_hz[cell] = psi;
+
+  hz[cell] = hz[cell] + u.sc * (curlEx - curlEy + psi.x - psi.y);
 }

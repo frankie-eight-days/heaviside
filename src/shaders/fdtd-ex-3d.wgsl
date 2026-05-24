@@ -1,11 +1,16 @@
-// 3D FDTD Ex update — vacuum + hard PEC boundary (M9a, no PML yet).
+// 3D FDTD Ex update with CPML on all six faces (M9b). Vacuum, no per-cell
+// materials (M9c). κ-stretching is hardcoded to 1 in this simplified CPML
+// (σ-only); the math leaves κ in place so the shader stays correct if we
+// enable stretching later.
 //
-//   ε ∂Ex/∂t = ∂Hz/∂y − ∂Hy/∂z   (μ_r = ε_r = 1, σ = 0)
+//   ε ∂Ex/∂t = (1/κ_y) ∂Hz/∂y − (1/κ_z) ∂Hy/∂z + ψE_x_y − ψE_x_z
+// ψ recurrence:
+//   ψE_x_y[n+1] = b_y · ψE_x_y[n] + a_y · ∂Hz/∂y
+//   ψE_x_z[n+1] = b_z · ψE_x_z[n] + a_z · ∂Hy/∂z
 //
-// Ex at (i+½, j, k). Buffer index ex[i,j,k] holds the Ex sample at that
-// staggered location. Hard PEC clamps Ex (tangential to all boundary faces
-// except i=0/W-1 where it's normal — but for the M9a smoke test we clamp
-// universally; M9c will be position-aware via the flags grid).
+// ψ pair packed per-cell as vec2<f32>(.x = ψ_y, .y = ψ_z). Outside the PML
+// region b=1, a=0 — ψ stays at its prior value (zero from reset) and the
+// recurrence is a no-op.
 
 struct Uniforms {
   size: vec3<u32>,
@@ -27,6 +32,9 @@ struct Uniforms {
 @group(0) @binding(1) var<storage, read_write> ex: array<f32>;
 @group(0) @binding(2) var<storage, read> hz: array<f32>;
 @group(0) @binding(3) var<storage, read> hy: array<f32>;
+@group(0) @binding(4) var<storage, read_write> psi_ex: array<vec2<f32>>;
+@group(0) @binding(5) var<storage, read> pml_y: array<vec4<f32>>;
+@group(0) @binding(6) var<storage, read> pml_z: array<vec4<f32>>;
 
 fn idx(i: u32, j: u32, k: u32) -> u32 {
   return i + j * u.size.x + k * u.size.x * u.size.y;
@@ -41,16 +49,22 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let H = u.size.y;
   let D = u.size.z;
   if (i >= W || j >= H || k >= D) { return; }
-
-  // Hard PEC at every boundary face — M9a only. M9b replaces with CPML.
-  if (i == 0u || i + 1u >= W ||
-      j == 0u || j + 1u >= H ||
-      k == 0u || k + 1u >= D) {
-    ex[idx(i, j, k)] = 0.0;
-    return;
-  }
+  if (j < 1u || k < 1u) { return; }  // curl needs j-1 and k-1
 
   let curlHz = hz[idx(i, j, k)] - hz[idx(i, j - 1u, k)];
   let curlHy = hy[idx(i, j, k)] - hy[idx(i, j, k - 1u)];
-  ex[idx(i, j, k)] = ex[idx(i, j, k)] + u.sc * (curlHz - curlHy);
+
+  // pml axis coefs at the E-position (.x = b_E, .y = a_E, .z/.w = H coefs).
+  // κ would live alongside but is fixed at 1 in this simplified CPML.
+  let py = pml_y[j];
+  let pz = pml_z[k];
+
+  let cell = idx(i, j, k);
+  var psi = psi_ex[cell];
+  // ψ recurrence — uses curl values from the just-updated H field.
+  psi.x = py.x * psi.x + py.y * curlHz;
+  psi.y = pz.x * psi.y + pz.y * curlHy;
+  psi_ex[cell] = psi;
+
+  ex[cell] = ex[cell] + u.sc * (curlHz - curlHy + psi.x - psi.y);
 }

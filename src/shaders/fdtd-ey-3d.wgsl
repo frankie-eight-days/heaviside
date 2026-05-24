@@ -1,5 +1,6 @@
-// 3D FDTD Ey update — vacuum + hard PEC boundary (M9a).
-//   ε ∂Ey/∂t = ∂Hx/∂z − ∂Hz/∂x
+// 3D FDTD Ey update with CPML (M9b).
+//   ε ∂Ey/∂t = (1/κ_z) ∂Hx/∂z − (1/κ_x) ∂Hz/∂x + ψE_y_z − ψE_y_x
+// ψ pack: .x = ψ_z, .y = ψ_x
 
 struct Uniforms {
   size: vec3<u32>,
@@ -21,6 +22,9 @@ struct Uniforms {
 @group(0) @binding(1) var<storage, read_write> ey: array<f32>;
 @group(0) @binding(2) var<storage, read> hx: array<f32>;
 @group(0) @binding(3) var<storage, read> hz: array<f32>;
+@group(0) @binding(4) var<storage, read_write> psi_ey: array<vec2<f32>>;
+@group(0) @binding(5) var<storage, read> pml_z: array<vec4<f32>>;
+@group(0) @binding(6) var<storage, read> pml_x: array<vec4<f32>>;
 
 fn idx(i: u32, j: u32, k: u32) -> u32 {
   return i + j * u.size.x + k * u.size.x * u.size.y;
@@ -35,15 +39,19 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let H = u.size.y;
   let D = u.size.z;
   if (i >= W || j >= H || k >= D) { return; }
-
-  if (i == 0u || i + 1u >= W ||
-      j == 0u || j + 1u >= H ||
-      k == 0u || k + 1u >= D) {
-    ey[idx(i, j, k)] = 0.0;
-    return;
-  }
+  if (k < 1u || i < 1u) { return; }
 
   let curlHx = hx[idx(i, j, k)] - hx[idx(i, j, k - 1u)];
   let curlHz = hz[idx(i, j, k)] - hz[idx(i - 1u, j, k)];
-  ey[idx(i, j, k)] = ey[idx(i, j, k)] + u.sc * (curlHx - curlHz);
+
+  let pz = pml_z[k];
+  let px = pml_x[i];
+
+  let cell = idx(i, j, k);
+  var psi = psi_ey[cell];
+  psi.x = pz.x * psi.x + pz.y * curlHx;
+  psi.y = px.x * psi.y + px.y * curlHz;
+  psi_ey[cell] = psi;
+
+  ey[cell] = ey[cell] + u.sc * (curlHx - curlHz + psi.x - psi.y);
 }

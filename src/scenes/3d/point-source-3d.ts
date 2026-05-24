@@ -4,9 +4,9 @@ import type { FDTDEngine3D } from '../../gpu/fdtd'
 export const pointSource3D: Scene = {
   id: '3d-point-source',
   category: '3d',
-  name: 'Point source (M9a smoke test)',
+  name: 'Point source (smoke test)',
   description:
-    'Centered Ez-polarized point source in a 128³ vacuum cube. Watch the XY midplane slice — should see concentric oscillations radiating outward, then reflecting off the hard PEC walls (CPML replaces them in M9b).',
+    'Centered Ez-polarized point source in a 128³ vacuum cube with CPML absorbing all six faces. Watch the XY midplane slice — concentric oscillations radiate outward and should fade into the boundary without visible reflection.',
   polarization: '3D',
   apply: (engine, _dims) => {
     const period = 60
