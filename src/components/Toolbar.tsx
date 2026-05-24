@@ -1,6 +1,8 @@
 import type {
   ModulationParams,
+  Polarization,
   SourceMode,
+  SourcePolarization,
   SourceWaveform,
   ViewMode,
 } from '../gpu/fdtd'
@@ -37,7 +39,10 @@ const TIP_WAVELENGTH =
   'Wavelength in vacuum, measured in grid cells. Smaller wavelength = higher frequency. With Material painted nearby, the wavelength inside it shrinks by √Dk.'
 
 const TIP_VIEW =
-  'Ez shows the instantaneous field (red = positive, blue = negative). Magnitude shows the time-averaged peak amplitude — radiation patterns and standing waves stay visible.'
+  'Field shows the instantaneous signed scalar (Ez in TMz, Hz in TEz; red = positive, blue = negative). Magnitude shows the time-averaged peak amplitude — radiation patterns and standing waves stay visible.'
+
+const TIP_SOURCE_POL =
+  'Source polarization. Ey drives a vertical voltage source (textbook microstrip excitation between trace and ground). Ex drives a horizontal voltage source.'
 
 const MATERIALS: MaterialOption[] = [
   { id: MAT_VACUUM, label: 'Eraser', swatch: '#0a0a0f' },
@@ -98,6 +103,9 @@ interface ToolbarProps {
   df: number
   onDfChange: (v: number) => void
   onPreset: (p: MaterialPreset) => void
+  polarization: Polarization
+  sourcePolarization: SourcePolarization
+  onSourcePolarizationChange: (p: SourcePolarization) => void
   sourcePeriod: number
   onSourcePeriodChange: (v: number) => void
   sourceMode: SourceMode
@@ -111,6 +119,8 @@ interface ToolbarProps {
   onProbesPerLineChange: (n: number) => void
   viewMode: ViewMode
   onViewModeChange: (m: ViewMode) => void
+  showGrid: boolean
+  onShowGridChange: (v: boolean) => void
   onUndo: () => void
   onResetFields: () => void
   onResetMaterials: () => void
@@ -127,6 +137,9 @@ export default function Toolbar({
   df,
   onDfChange,
   onPreset,
+  polarization,
+  sourcePolarization,
+  onSourcePolarizationChange,
   sourcePeriod,
   onSourcePeriodChange,
   sourceMode,
@@ -140,6 +153,8 @@ export default function Toolbar({
   onProbesPerLineChange,
   viewMode,
   onViewModeChange,
+  showGrid,
+  onShowGridChange,
   onUndo,
   onResetFields,
   onResetMaterials,
@@ -207,6 +222,31 @@ export default function Toolbar({
             ))}
           </div>
         </>
+      )}
+
+      {material === MAT_SOURCE && polarization === 'TEz' && (
+        <div className="segmented" title={TIP_SOURCE_POL}>
+          <button
+            type="button"
+            className={
+              'seg-btn' +
+              (sourcePolarization === 'y' ? ' seg-btn--active' : '')
+            }
+            onClick={() => onSourcePolarizationChange('y')}
+          >
+            Ey
+          </button>
+          <button
+            type="button"
+            className={
+              'seg-btn' +
+              (sourcePolarization === 'x' ? ' seg-btn--active' : '')
+            }
+            onClick={() => onSourcePolarizationChange('x')}
+          >
+            Ex
+          </button>
+        </div>
       )}
 
       {material === MAT_SOURCE && (
@@ -368,7 +408,7 @@ export default function Toolbar({
           className={'seg-btn' + (viewMode === 'ez' ? ' seg-btn--active' : '')}
           onClick={() => onViewModeChange('ez')}
         >
-          Ez
+          {polarization === 'TEz' ? 'Hz' : 'Ez'}
         </button>
         <button
           type="button"
@@ -378,6 +418,15 @@ export default function Toolbar({
           Magnitude
         </button>
       </div>
+
+      <button
+        type="button"
+        className={'action-btn' + (showGrid ? ' action-btn--primary' : '')}
+        onClick={() => onShowGridChange(!showGrid)}
+        title="Toggle wavelength helper grid (λ major lines, λ/4 minor lines, anchored to first source)"
+      >
+        λ grid
+      </button>
 
       <div className="action-group">
         <button

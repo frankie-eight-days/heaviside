@@ -7,6 +7,7 @@ export const broadsideArray: Scene = {
   name: '2-element broadside array',
   description:
     'Two sources spaced λ/2 apart, driven in phase. Probes broadside (perpendicular to the array axis) read strong — that\'s the broadside peak. Endfire probes read weak.',
+  polarization: 'TMz',
   apply: (engine, { width: W, height: H }) => {
     const period = 80
     engine.resetMaterials()

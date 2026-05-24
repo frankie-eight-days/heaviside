@@ -1,13 +1,14 @@
 import type { Scene } from '../types'
 import type { ProbeSpec } from '../../gpu/fdtd'
-import { PEC_BRUSH, materialBrush } from '../helpers'
+import { PEC_BRUSH, materialBrush, portColumn } from '../helpers'
 
 export const differentialPair: Scene = {
   id: 'pcb-differential-pair',
   category: 'pcb',
-  name: 'Differential pair (2D analog)',
+  name: 'Differential pair',
   description:
-    'Two parallel traces driven 180° out of phase with FR-4 between. Antisymmetric parallel-plate mode propagates between them — differential field stays trapped. Probe line in the substrate reads VSWR.',
+    'Two PEC traces with FR-4 between, no ground plane. The diff-mode TEM has Ey pointing between traces, Hz circulating around them. Port drives Ey across the full gap; probe line along the midline reads diff-mode VSWR.',
+  polarization: 'TEz',
   apply: (engine, { width: W, height: H }) => {
     engine.resetMaterials()
     engine.resetFields()
@@ -17,20 +18,15 @@ export const differentialPair: Scene = {
 
     const FR4 = materialBrush(4.4, 0.02)
     const tracePlusY = Math.floor(H * 0.45)
-    const traceMinusY = tracePlusY + 40
+    const traceMinusY = tracePlusY + 30
     const midY = Math.floor((tracePlusY + traceMinusY) / 2)
 
     engine.paintRect(0, tracePlusY + 2, W, traceMinusY - 1, FR4)
     engine.paintRect(0, tracePlusY, W, tracePlusY + 1, PEC_BRUSH)
     engine.paintRect(0, traceMinusY - 1, W, traceMinusY, PEC_BRUSH)
 
-    const portX = 20
-    engine.setSources([
-      { x: portX, y: tracePlusY + 4, phase: 0, amplitude: 1 },
-      { x: portX, y: traceMinusY - 4, phase: Math.PI, amplitude: 1 },
-    ])
+    engine.setSources(portColumn(20, tracePlusY + 2, traceMinusY - 1, 0, 1, 'y'))
 
-    // Probe line down the middle of the gap (where differential E is strongest).
     const probes: ProbeSpec[] = []
     const xStart = 60
     const xEnd = W - 60
@@ -40,6 +36,12 @@ export const differentialPair: Scene = {
       probes.push({ x: Math.round(xStart + t * (xEnd - xStart)), y: midY })
     }
 
-    return { sourcePeriod: 80, sourceMode: 'cw', viewMode: 'magnitude', probes }
+    return {
+      sourcePeriod: 80,
+      sourceMode: 'cw',
+      viewMode: 'magnitude',
+      probes,
+      polarization: 'TEz',
+    }
   },
 }

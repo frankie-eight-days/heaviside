@@ -7,6 +7,7 @@ export const yagiUda: Scene = {
   name: 'Yagi-Uda antenna',
   description:
     '4-element Yagi: reflector, driven dipole, two directors. Pre-placed probes show the front-to-back gain ratio in the panel.',
+  polarization: 'TMz',
   apply: (engine, { width: W, height: H }) => {
     const period = 80
     engine.resetMaterials()
@@ -20,13 +21,15 @@ export const yagiUda: Scene = {
     const cx = Math.floor(W * 0.32)
     const cy = Math.floor(H / 2)
 
-    // Element lengths (textbook Yagi proportions).
-    const drivenHalf = Math.floor(λ * 0.25)
-    const reflectorHalf = Math.floor(λ * 0.275)
-    const directorHalf = Math.floor(λ * 0.2)
+    // Resonant element lengths (tip-to-tip): driven ≈ 0.475λ, reflector ~5%
+    // longer, directors ~5% shorter. At λ=57 cells integer rounding gives us
+    // ±1 cell per arm — the best resolution available without bumping period.
+    const drivenHalf = Math.max(2, Math.floor(λ * 0.21))
+    const reflectorHalf = drivenHalf + 1
+    const directorHalf = Math.max(2, drivenHalf - 1)
     const gap = 2
 
-    // Spacings.
+    // Spacings (textbook Yagi is tight: 0.15–0.35λ, NOT 0.5λ).
     const reflectorSpacing = Math.floor(λ * 0.25)
     const directorSpacing = Math.floor(λ * 0.3)
 

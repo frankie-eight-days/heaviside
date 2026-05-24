@@ -7,6 +7,7 @@ export const cornerReflector: Scene = {
   name: 'Corner reflector',
   description:
     'Source inside a 3-walled PEC box opening to the right. Forward probes read strong; probes behind / above the walls are in the shadow.',
+  polarization: 'TMz',
   apply: (engine, { width: W, height: H }) => {
     const period = 80
     engine.resetMaterials()

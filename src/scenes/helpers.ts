@@ -1,4 +1,4 @@
-import type { BrushSpec, FDTDEngine, SourceSpec } from '../gpu/fdtd'
+import type { BrushSpec, FDTDEngine, SourcePolarization, SourceSpec } from '../gpu/fdtd'
 import { dfToSigma } from '../gpu/fdtd'
 
 // Courant number — same as the engine's. Kept here so scenes don't have to
@@ -19,19 +19,21 @@ export function wavelengthCells(period: number): number {
 
 // Vertical column of single-cell sources sharing phase + amplitude.
 // Used to express "ports" — multi-cell drivers across the gap between two
-// PEC structures, as in microstrip drive-end excitation.
+// PEC structures, as in microstrip drive-end excitation. Pass polarization
+// to drive Ey across the gap for clean TEM excitation in TEz scenes.
 export function portColumn(
   x: number,
   y1: number,
   y2: number,
   phase = 0,
   amplitude = 1,
+  polarization?: SourcePolarization,
 ): SourceSpec[] {
   const out: SourceSpec[] = []
   const lo = Math.min(y1, y2)
   const hi = Math.max(y1, y2)
   for (let y = lo; y <= hi; y++) {
-    out.push({ x, y, phase, amplitude })
+    out.push({ x, y, phase, amplitude, polarization })
   }
   return out
 }

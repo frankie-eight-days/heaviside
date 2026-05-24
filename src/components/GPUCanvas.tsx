@@ -1,14 +1,16 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import { initGPU } from '../gpu/init'
+import { initGPU, type GPUContext } from '../gpu/init'
+import { createEngine } from '../gpu/engine'
 import {
-  createFDTD,
   type BrushSpec,
   type FDTDEngine,
   type MaterialSnapshot,
   type ModulationParams,
+  type Polarization,
   type ProbeHistorySnapshot,
   type ProbeSpec,
   type SourceMode,
+  type SourcePolarization,
   type SourceWaveform,
   type ViewMode,
 } from '../gpu/fdtd'
@@ -33,11 +35,15 @@ interface GPUCanvasProps {
   tool: Tool
   brush: BrushSpec
   brushRadius: number
+  polarization: Polarization
+  onPolarizationChange: (p: Polarization) => void
+  sourcePolarization: SourcePolarization
   sourcePeriod: number
   sourceMode: SourceMode
   sourceWaveform: SourceWaveform
   modulation: ModulationParams
   viewMode: ViewMode
+  showGrid: boolean
   probes: ProbeSpec[]
   probesPerLine: number
   onProbesPlaced: (positions: ProbeSpec[]) => void
@@ -49,11 +55,15 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     tool,
     brush,
     brushRadius,
+    polarization,
+    onPolarizationChange,
+    sourcePolarization,
     sourcePeriod,
     sourceMode,
     sourceWaveform,
     modulation,
     viewMode,
+    showGrid,
     probes,
     probesPerLine,
     onProbesPlaced,
@@ -62,14 +72,26 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const gridRef = useRef<HTMLCanvasElement | null>(null)
   const overlayRef = useRef<HTMLCanvasElement | null>(null)
+  const gpuRef = useRef<GPUContext | null>(null)
   const engineRef = useRef<FDTDEngine | null>(null)
+  const lastSizeRef = useRef<[number, number]>([0, 0])
   const undoStackRef = useRef<MaterialSnapshot[]>([])
   const isPaintingRef = useRef(false)
   const brushRef = useRef(brush)
   const brushRadiusRef = useRef(brushRadius)
   const toolRef = useRef(tool)
   const probesPerLineRef = useRef(probesPerLine)
+  const polarizationRef = useRef(polarization)
+  const sourcePolarizationRef = useRef(sourcePolarization)
+  const showGridRef = useRef(showGrid)
+  const sourcePeriodRef = useRef(sourcePeriod)
+  const sourceModeRef = useRef(sourceMode)
+  const sourceWaveformRef = useRef(sourceWaveform)
+  const modulationRef = useRef(modulation)
+  const viewModeRef = useRef(viewMode)
+  const probesRef = useRef(probes)
   const dragStartRef = useRef<[number, number] | null>(null)
   const dragEndRef = useRef<[number, number] | null>(null)
   const dragToolRef = useRef<Tool | null>(null)
@@ -88,23 +110,69 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     probesPerLineRef.current = probesPerLine
   }, [probesPerLine])
   useEffect(() => {
+    sourcePolarizationRef.current = sourcePolarization
+  }, [sourcePolarization])
+  useEffect(() => {
+    showGridRef.current = showGrid
+  }, [showGrid])
+  useEffect(() => {
+    sourcePeriodRef.current = sourcePeriod
     engineRef.current?.setSourcePeriod(sourcePeriod)
   }, [sourcePeriod])
   useEffect(() => {
+    sourceModeRef.current = sourceMode
     engineRef.current?.setSourceMode(sourceMode)
   }, [sourceMode])
   useEffect(() => {
+    sourceWaveformRef.current = sourceWaveform
     engineRef.current?.setSourceWaveform(sourceWaveform)
   }, [sourceWaveform])
   useEffect(() => {
+    modulationRef.current = modulation
     engineRef.current?.setModulation(modulation)
   }, [modulation])
   useEffect(() => {
+    viewModeRef.current = viewMode
     engineRef.current?.setViewMode(viewMode)
   }, [viewMode])
   useEffect(() => {
+    probesRef.current = probes
     engineRef.current?.setProbes(probes)
   }, [probes])
+
+  // Apply all React-tracked settings to a freshly-created engine. Used by
+  // both the initial-mount path and the polarization swap path.
+  const seedEngineFromProps = (engine: FDTDEngine) => {
+    engine.setSourcePeriod(sourcePeriodRef.current)
+    engine.setSourceMode(sourceModeRef.current)
+    engine.setSourceWaveform(sourceWaveformRef.current)
+    engine.setModulation(modulationRef.current)
+    engine.setViewMode(viewModeRef.current)
+    engine.setProbes(probesRef.current)
+  }
+
+  // Polarization swap. Snapshots materials, destroys the old engine, creates
+  // the new one, restores materials. Fields are intentionally cleared (no
+  // sensible mapping between Ez and Hz). Probes keep positions; history wipes.
+  // See ADR 0009.
+  const swapEngineTo = (target: Polarization): FDTDEngine | null => {
+    const gpu = gpuRef.current
+    if (!gpu) return null
+    const old = engineRef.current
+    const snapshot = old?.snapshotMaterials() ?? null
+    old?.destroy()
+
+    const fresh = createEngine(gpu, target)
+    const [w, h] = lastSizeRef.current
+    if (w > 0 && h > 0) fresh.resize(w, h)
+    if (snapshot && snapshot.epsSig.length > 0) fresh.restoreMaterials(snapshot)
+    seedEngineFromProps(fresh)
+    engineRef.current = fresh
+    polarizationRef.current = target
+    undoStackRef.current = []
+    onUndoStackChange(false)
+    return fresh
+  }
 
   useImperativeHandle(ref, () => ({
     undo: () => {
@@ -129,13 +197,23 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
       engineRef.current?.firePulse()
     },
     applyScene: (scene) => {
-      const engine = engineRef.current
+      let engine = engineRef.current
       if (!engine) return null
+      // Synchronously swap engines if the scene declares a different
+      // polarization. Then run apply on the (possibly new) engine and
+      // notify the parent of the polarization change.
+      if (scene.polarization && scene.polarization !== engine.polarization) {
+        const swapped = swapEngineTo(scene.polarization)
+        if (!swapped) return null
+        engine = swapped
+        onPolarizationChange(scene.polarization)
+      }
       const dims = engine.getDims()
       if (dims.width === 0 || dims.height === 0) return null
       undoStackRef.current = []
       onUndoStackChange(false)
-      return scene.apply(engine, dims)
+      const cfg = scene.apply(engine, dims)
+      return { ...cfg, polarization: engine.polarization }
     },
     getProbeHistory: () => engineRef.current?.getProbeHistory() ?? null,
     canUndo: () => undoStackRef.current.length > 0,
@@ -149,26 +227,25 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     let cancelled = false
 
     const parent = canvas.parentElement?.parentElement
-    let lastW = 0
-    let lastH = 0
     const fit = () => {
       const target = parent ?? canvas
       const w = Math.max(8, target.clientWidth)
       const h = Math.max(8, target.clientHeight)
+      const [lastW, lastH] = lastSizeRef.current
       if (w !== lastW || h !== lastH) {
-        lastW = w
-        lastH = h
+        lastSizeRef.current = [w, h]
         const dpr = window.devicePixelRatio || 1
         canvas.style.width = `${w}px`
         canvas.style.height = `${h}px`
         canvas.width = Math.max(1, Math.floor(w * dpr))
         canvas.height = Math.max(1, Math.floor(h * dpr))
-        const overlay = overlayRef.current
-        if (overlay) {
-          overlay.style.width = `${w}px`
-          overlay.style.height = `${h}px`
-          overlay.width = canvas.width
-          overlay.height = canvas.height
+        for (const layer of [gridRef.current, overlayRef.current]) {
+          if (layer) {
+            layer.style.width = `${w}px`
+            layer.style.height = `${h}px`
+            layer.width = canvas.width
+            layer.height = canvas.height
+          }
         }
       }
       engineRef.current?.resize(w, h)
@@ -180,19 +257,17 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     initGPU(canvas)
       .then((gpu) => {
         if (cancelled) return
-        const engine = createFDTD(gpu)
-        engine.resize(lastW, lastH)
-        engine.setSourcePeriod(sourcePeriod)
-        engine.setSourceMode(sourceMode)
-        engine.setSourceWaveform(sourceWaveform)
-        engine.setModulation(modulation)
-        engine.setViewMode(viewMode)
-        engine.setProbes(probes)
+        gpuRef.current = gpu
+        const engine = createEngine(gpu, polarizationRef.current)
+        const [w, h] = lastSizeRef.current
+        engine.resize(w, h)
+        seedEngineFromProps(engine)
         engineRef.current = engine
 
         const tick = () => {
           if (cancelled) return
-          engine.step()
+          engineRef.current?.step()
+          drawGrid()
           raf = requestAnimationFrame(tick)
         }
         tick()
@@ -207,8 +282,129 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
       ro.disconnect()
       engineRef.current?.destroy()
       engineRef.current = null
+      gpuRef.current = null
     }
   }, [])
+
+  // Manual polarization-toggle path. Skipped on initial mount and when the
+  // engine was already swapped by applyScene (engineRef.current.polarization
+  // already matches). See ADR 0009.
+  useEffect(() => {
+    if (!gpuRef.current) return
+    const engine = engineRef.current
+    if (!engine) return
+    if (engine.polarization === polarization) return
+    swapEngineTo(polarization)
+  }, [polarization])
+
+  // λ-grid overlay: minor lines every λ/4, major every λ, anchored to the
+  // first source's position (or canvas center if no source). Pure decoration.
+  // Drawing is cheap (~50 line strokes + ~10 fillText) so we redraw every
+  // rAF tick rather than tracking change conditions.
+  const SC = 1 / Math.SQRT2
+  const drawGrid = () => {
+    const overlay = gridRef.current
+    if (!overlay) return
+    const ctx = overlay.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, overlay.width, overlay.height)
+    if (!showGridRef.current) return
+    const engine = engineRef.current
+    if (!engine) return
+
+    const { width: W, height: H } = engine.getDims()
+    if (W === 0 || H === 0) return
+    const lambdaCells = sourcePeriodRef.current * SC
+    if (lambdaCells < 4) return
+
+    const sources = engine.getSources()
+    const anchorX = sources[0]?.x ?? W / 2
+    const anchorY = sources[0]?.y ?? H / 2
+
+    const dpr = window.devicePixelRatio || 1
+    const cssW = overlay.clientWidth
+    const cssH = overlay.clientHeight
+    if (cssW === 0 || cssH === 0) return
+    const sx = (cssW * dpr) / W
+    const sy = (cssH * dpr) / H
+
+    const maxN = Math.ceil(Math.max(W, H) / lambdaCells) + 1
+
+    // Minor lines (every λ/4) — skip indices that coincide with major lines
+    ctx.lineWidth = 1 * dpr
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)'
+    for (let n = -maxN * 4; n <= maxN * 4; n++) {
+      if (n % 4 === 0) continue
+      const cellX = anchorX + (n * lambdaCells) / 4
+      if (cellX < 0 || cellX > W) continue
+      const x = cellX * sx
+      ctx.beginPath()
+      ctx.moveTo(x, 0)
+      ctx.lineTo(x, overlay.height)
+      ctx.stroke()
+    }
+    for (let n = -maxN * 4; n <= maxN * 4; n++) {
+      if (n % 4 === 0) continue
+      const cellY = anchorY + (n * lambdaCells) / 4
+      if (cellY < 0 || cellY > H) continue
+      const y = cellY * sy
+      ctx.beginPath()
+      ctx.moveTo(0, y)
+      ctx.lineTo(overlay.width, y)
+      ctx.stroke()
+    }
+
+    // Major lines (every λ)
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)'
+    for (let n = -maxN; n <= maxN; n++) {
+      const cellX = anchorX + n * lambdaCells
+      if (cellX < 0 || cellX > W) continue
+      const x = cellX * sx
+      ctx.beginPath()
+      ctx.moveTo(x, 0)
+      ctx.lineTo(x, overlay.height)
+      ctx.stroke()
+    }
+    for (let n = -maxN; n <= maxN; n++) {
+      const cellY = anchorY + n * lambdaCells
+      if (cellY < 0 || cellY > H) continue
+      const y = cellY * sy
+      ctx.beginPath()
+      ctx.moveTo(0, y)
+      ctx.lineTo(overlay.width, y)
+      ctx.stroke()
+    }
+
+    // λ-multiple labels along the bottom edge
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.55)'
+    ctx.font = `${11 * dpr}px ui-monospace, SFMono-Regular, Menlo, monospace`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'bottom'
+    for (let n = -maxN; n <= maxN; n++) {
+      if (n === 0) continue
+      const cellX = anchorX + n * lambdaCells
+      if (cellX < 12 || cellX > W - 12) continue
+      const x = cellX * sx
+      const sign = n > 0 ? '+' : ''
+      ctx.fillText(`${sign}${n}λ`, x, overlay.height - 6 * dpr)
+    }
+
+    // Inline "λ = N cells" badge at the anchor
+    const anchorPxX = anchorX * sx
+    const anchorPxY = anchorY * sy
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'top'
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.55)'
+    const label = `λ = ${Math.round(lambdaCells)} cells`
+    const padX = 4 * dpr
+    const padY = 3 * dpr
+    const metrics = ctx.measureText(label)
+    const boxW = metrics.width + padX * 2
+    const boxH = 14 * dpr
+    ctx.fillRect(anchorPxX + 8 * dpr, anchorPxY + 8 * dpr, boxW, boxH)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)'
+    ctx.fillText(label, anchorPxX + 8 * dpr + padX, anchorPxY + 8 * dpr + padY)
+  }
 
   const eventToGrid = (
     e: React.PointerEvent<HTMLCanvasElement>,
@@ -278,7 +474,6 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
         ctx.stroke()
       }
     } else {
-      // Single-click preview: just a circle at the start.
       ctx.fillStyle = 'rgba(255, 255, 255, 0.85)'
       ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)'
       ctx.lineWidth = 1 * dpr
@@ -303,7 +498,15 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     const g = eventToGrid(e)
     if (!g) return
     if (toolRef.current === 'source') {
-      engine.placeSource(g[0], g[1])
+      engine.setSources([
+        {
+          x: g[0],
+          y: g[1],
+          phase: 0,
+          amplitude: 1,
+          polarization: sourcePolarizationRef.current,
+        },
+      ])
       return
     }
     if (toolRef.current === 'probe') {
@@ -395,6 +598,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
       />
+      <canvas ref={gridRef} className="overlay-canvas grid-canvas" />
       <canvas ref={overlayRef} className="overlay-canvas" />
     </div>
   )

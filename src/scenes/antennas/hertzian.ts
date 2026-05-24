@@ -7,6 +7,7 @@ export const hertzianDipole: Scene = {
   name: 'Hertzian dipole',
   description:
     'Single point source — the infinitesimal antenna. Probes along one axis show 1/√r amplitude falloff (the 2D cylindrical-wave signature).',
+  polarization: 'TMz',
   apply: (engine, { width: W, height: H }) => {
     const period = 80
     engine.resetMaterials()

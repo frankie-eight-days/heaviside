@@ -1,4 +1,4 @@
-import type { FDTDEngine, ProbeSpec, SourceMode, ViewMode } from '../gpu/fdtd'
+import type { FDTDEngine, Polarization, ProbeSpec, SourceMode, ViewMode } from '../gpu/fdtd'
 
 export type SceneCategory = 'antennas' | 'pcb'
 
@@ -12,6 +12,10 @@ export interface SceneConfig {
   // merge with existing probes) — scenes that omit this clear any prior
   // probes on load.
   probes?: ProbeSpec[]
+  // Polarization this scene was designed for. GPUCanvas swaps engines to
+  // match before running apply(). See ADR 0009. Omitted = runs on whatever
+  // polarization is currently active.
+  polarization?: Polarization
 }
 
 export interface Scene {
@@ -19,6 +23,9 @@ export interface Scene {
   category: SceneCategory
   name: string
   description: string
+  // Optional declared polarization. If set, loading the scene auto-switches
+  // the engine. If unset, the scene runs on whatever is currently active.
+  polarization?: Polarization
   apply: (
     engine: FDTDEngine,
     dims: { width: number; height: number },

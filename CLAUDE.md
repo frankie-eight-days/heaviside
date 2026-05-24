@@ -2,7 +2,7 @@
 
 Browser-based 2D EM field solver, oriented toward **practical RF engineering pedagogy**: antennas, PCB transmission lines (microstrip / stripline / differential pair), and standard measurements (VSWR, S-parameters). Inspired by Falstad's circuit sims but with real FDTD physics underneath. Target deployment: free public site on Vercel.
 
-The 2D TMz polarization happens to support both "antennas in free space, top-down" *and* "transmission line side-view, signal propagating along the trace" with the same physics — see [ADR 0002](docs/decisions/0002-2d-fdtd-tmz-first.md) and the M6 PCB scenes.
+Two polarization engines run side-by-side, selectable via a header toggle — **TMz** (Ez out of page) for antenna scenes, **TEz** (Hz out of page, Ey vertical) for PCB cross-sections. Scenes declare which engine they want; the toggle also lets users compare the same geometry under both polarizations. See [ADR 0002](docs/decisions/0002-2d-fdtd-tmz-first.md) for why TMz first and [ADR 0009](docs/decisions/0009-tez-polarization-fork.md) for the TEz fork.
 
 ## Stack
 
@@ -16,16 +16,21 @@ The 2D TMz polarization happens to support both "antennas in free space, top-dow
 src/
 ├── gpu/
 │   ├── init.ts          WebGPU adapter / device / canvas context setup
-│   └── fdtd.ts          Engine factory: pipelines, bind groups, resize, step, paint, sources, view-mode
+│   ├── fdtd.ts          TMz engine factory + shared types (Polarization, SourceSpec, FDTDEngine…)
+│   ├── fdtd-tez.ts      TEz engine factory — same FDTDEngine interface, fields are Ex/Ey/Hz
+│   └── engine.ts        Polarization-aware factory used by GPUCanvas
 ├── shaders/
-│   ├── fdtd-e.wgsl      E-field update with per-cell ε,σ and a PEC flag bit
-│   ├── fdtd-h.wgsl      H-field update (TMz: Hx, Hy)
-│   ├── envelope.wgsl    Peak-with-decay EMA of |Ez| for the magnitude view
-│   └── field-render.wgsl  Fullscreen-triangle field renderer (Ez or Magnitude)
+│   ├── fdtd-e.wgsl, fdtd-h.wgsl         TMz E/H Yee updates
+│   ├── fdtd-e-tez.wgsl, fdtd-h-tez.wgsl TEz E/H Yee updates (Hz split for PML)
+│   ├── source-apply{,-tez}.wgsl         Per-step source writes (Ez vs Ex/Ey)
+│   ├── envelope{,-tez}.wgsl             |Ez| / |E| peak-with-decay envelopes
+│   ├── probe-sample{,-tez}.wgsl         Per-step probe writes (Ez vs Hz)
+│   └── field-render{,-tez}.wgsl         Fullscreen-triangle renderers
 ├── components/
-│   ├── GPUCanvas.tsx    React wrapper. Imperative GPU code lives here in useEffect.
-│   └── Toolbar.tsx      Brush palette, sliders, source controls, view toggle, actions
-├── scenes/              [M6+] Scene definitions for the Examples sidebar — antennas, PCB structures
+│   ├── GPUCanvas.tsx    React wrapper. Owns engine lifecycle; swaps engines on polarization change.
+│   ├── Toolbar.tsx      Brush palette, sliders, source controls (incl. Ex/Ey in TEz), view toggle.
+│   └── PolarizationToggle.tsx  Header segmented control: [TMz] [TEz] [3D (soon)]
+├── scenes/              Scene definitions; each declares its preferred polarization
 ├── App.tsx, main.tsx, *.css
 docs/
 └── decisions/           Numbered ADRs documenting architectural choices.
@@ -48,9 +53,9 @@ Compute-then-render per frame: H pass → E pass → envelope pass (per FDTD sub
 - [~] **M7a — Probes + spectrum analyzer.** Probe primitive (click to drop, max 8), GPU ring-buffer history (1024 samples per probe), async readback via mapAsync. Right-panel `MeasurementPanel` shows the selected probe's time waveform and FFT magnitude spectrum, live-updated every frame. Hand-rolled radix-2 FFT, no deps.
 - [x] **M7b — VSWR + multi-probe analysis.** Probe tool supports click-drag for a line of probes (N controlled by a slider, max 32 probes total). Overlay canvas previews the line during drag. MeasurementPanel computes VSWR + |Γ| + return loss from max/min `|Ez|` across all probes. Per-probe metrics in the list: peak, RMS, phase relative to P1 (derived from FFT bin at source frequency). Spectrum plot gets a Linear/dB toggle with a −60 dB floor.
 - [x] **M7c — Waveform generators.** Source modulation: sine / square (with tanh-shaped edge sharpness slider) / triangle / sawtooth / AM (carrier × `(1 + m·sin(ω_m t))`) / FM (`sin(ω_c t + β·sin(ω_m t))`). All computed JS-side in `evaluateSource()`; no shader work. Square / sawtooth excite harmonic combs visible in the spectrum analyzer; AM produces sidebands, FM produces Bessel-shaped multi-peaks.
+- [x] **M8 — 2D TEz polarization variant.** Parallel engine alongside TMz, selected via header segmented control. Hz out of page, Ey vertical between conductors — the textbook quasi-TEM mode that microstrip / stripline / differential pair actually want. PCB scenes rewritten as TEz; antenna scenes stay TMz. Scene-level polarization tag auto-switches the engine on load. Source brush gains an Ex/Ey selector when the active polarization is TEz. See [ADR 0009](docs/decisions/0009-tez-polarization-fork.md).
 - [ ] **M7d — S-parameters.** Reference-run de-embedding (run scene with matched load, store incident wave, subtract from total to get reflected). S11 magnitude + phase plot. Optional dB scale on the spectrum analyzer.
-- [ ] **M8 — Plane wave excitation** (formerly M5b). TF/SF boundary or driven-row plane wave. Unlocks scattering / single-slit diffraction / frequency-selective surface demos.
-- [ ] **M9 — 3D FDTD** (formerly M7). Extend to 3D. Volume rendering with slice planes. Near-to-far-field transforms for quantitative radiation patterns.
+- [ ] **M9 — 3D FDTD.** Extend to 3D. Volume rendering with slice planes. Real polarization, near-to-far-field transforms for quantitative radiation patterns in dBi.
 
 ## Decisions
 
@@ -65,6 +70,7 @@ Current ADRs:
 - [0006 — Multi-source primitive via a separate compute pass](docs/decisions/0006-multi-source-primitive.md)
 - [0007 — Scenes as TypeScript modules with imperative apply](docs/decisions/0007-scene-format.md)
 - [0008 — Probe primitive: GPU ring buffer + mapAsync readback](docs/decisions/0008-probe-primitive.md)
+- [0009 — TEz polarization fork (parallel engine, header toggle)](docs/decisions/0009-tez-polarization-fork.md)
 
 ## Dev
 

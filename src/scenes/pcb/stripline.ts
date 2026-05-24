@@ -1,13 +1,14 @@
 import type { Scene } from '../types'
 import type { ProbeSpec } from '../../gpu/fdtd'
-import { PEC_BRUSH, materialBrush } from '../helpers'
+import { PEC_BRUSH, materialBrush, portColumn } from '../helpers'
 
 export const stripline: Scene = {
   id: 'pcb-stripline',
   category: 'pcb',
-  name: 'Stripline (2D parallel-plate analog)',
+  name: 'Stripline',
   description:
-    'Trace embedded between two PEC planes in FR-4 — field fully confined, no fringing into air. Same TMz caveat as microstrip: what propagates is the parallel-plate TM₁, not stripline TEM.',
+    'Signal trace embedded between two ground planes in FR-4. TEM mode fully confined — no fringing into air, no radiation. Port drives Ey in the upper half-channel; probes along the upper midline read VSWR.',
+  polarization: 'TEz',
   apply: (engine, { width: W, height: H }) => {
     engine.resetMaterials()
     engine.resetFields()
@@ -17,8 +18,8 @@ export const stripline: Scene = {
 
     const FR4 = materialBrush(4.4, 0.02)
     const traceY = Math.floor(H * 0.5)
-    const topY = traceY - 30
-    const bottomY = traceY + 30
+    const topY = traceY - 20
+    const bottomY = traceY + 20
     const upperMidY = Math.floor((topY + traceY) / 2)
 
     engine.paintRect(0, topY + 2, W, bottomY - 1, FR4)
@@ -26,9 +27,10 @@ export const stripline: Scene = {
     engine.paintRect(0, bottomY - 1, W, bottomY, PEC_BRUSH)
     engine.paintRect(0, traceY, W, traceY + 1, PEC_BRUSH)
 
-    engine.setSources([{ x: 20, y: upperMidY, phase: 0, amplitude: 1 }])
+    // Drive the upper half-channel — symmetric stripline supports identical
+    // modes in upper and lower halves; one half is enough to demo.
+    engine.setSources(portColumn(20, topY + 2, traceY - 1, 0, 1, 'y'))
 
-    // Probe line in the upper half-channel (where the source drives).
     const probes: ProbeSpec[] = []
     const xStart = 60
     const xEnd = W - 60
@@ -38,6 +40,12 @@ export const stripline: Scene = {
       probes.push({ x: Math.round(xStart + t * (xEnd - xStart)), y: upperMidY })
     }
 
-    return { sourcePeriod: 80, sourceMode: 'cw', viewMode: 'magnitude', probes }
+    return {
+      sourcePeriod: 80,
+      sourceMode: 'cw',
+      viewMode: 'magnitude',
+      probes,
+      polarization: 'TEz',
+    }
   },
 }

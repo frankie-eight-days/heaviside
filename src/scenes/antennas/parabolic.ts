@@ -7,6 +7,7 @@ export const parabolicReflector: Scene = {
   name: 'Parabolic reflector',
   description:
     'Source at the focus of a parabolic PEC dish. Probes along the collimated beam axis show roughly constant amplitude — the rays are parallel, not spreading.',
+  polarization: 'TMz',
   apply: (engine, { width: W, height: H }) => {
     const period = 80
     engine.resetMaterials()

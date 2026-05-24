@@ -9,12 +9,15 @@ import Toolbar, {
 } from './components/Toolbar'
 import ExamplesSidebar from './components/ExamplesSidebar'
 import MeasurementPanel from './components/MeasurementPanel'
+import PolarizationToggle from './components/PolarizationToggle'
 import {
   dfToSigma,
   type BrushSpec,
   type ModulationParams,
+  type Polarization,
   type ProbeSpec,
   type SourceMode,
+  type SourcePolarization,
   type SourceWaveform,
   type ViewMode,
 } from './gpu/fdtd'
@@ -26,6 +29,8 @@ export default function App() {
   const [brushRadius, setBrushRadius] = useState(5)
   const [dk, setDk] = useState(4.4)
   const [df, setDf] = useState(0.02)
+  const [polarization, setPolarization] = useState<Polarization>('TMz')
+  const [sourcePolarization, setSourcePolarization] = useState<SourcePolarization>('y')
   const [sourcePeriod, setSourcePeriod] = useState(80)
   const [sourceMode, setSourceMode] = useState<SourceMode>('cw')
   const [sourceWaveform, setSourceWaveform] = useState<SourceWaveform>('sine')
@@ -36,6 +41,7 @@ export default function App() {
     squareEdge: 20,
   })
   const [viewMode, setViewMode] = useState<ViewMode>('ez')
+  const [showGrid, setShowGrid] = useState(true)
   const [canUndo, setCanUndo] = useState(false)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null)
   const [probes, setProbes] = useState<ProbeSpec[]>([])
@@ -102,8 +108,16 @@ export default function App() {
       setSourceMode(cfg.sourceMode)
       setViewMode(cfg.viewMode)
       setProbes(cfg.probes ?? [])
+      if (cfg.polarization) setPolarization(cfg.polarization)
     }
     setActiveSceneId(scene.id)
+  }, [])
+
+  // Keep the source-polarization default sensible when the engine swaps. The
+  // canvas-side onPointerDown reads sourcePolarization to place a new source.
+  const handlePolarizationChange = useCallback((p: Polarization) => {
+    setPolarization(p)
+    setSourcePolarization(p === 'TEz' ? 'y' : 'z')
   }, [])
 
   useEffect(() => {
@@ -127,6 +141,10 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
+        <PolarizationToggle
+          polarization={polarization}
+          onChange={handlePolarizationChange}
+        />
         <h1>EM Playground</h1>
         <span className="subtitle">
           Paint materials, place sources and probes. Magnitude shows radiation
@@ -148,6 +166,9 @@ export default function App() {
         df={df}
         onDfChange={setDf}
         onPreset={handlePreset}
+        polarization={polarization}
+        sourcePolarization={sourcePolarization}
+        onSourcePolarizationChange={setSourcePolarization}
         sourcePeriod={sourcePeriod}
         onSourcePeriodChange={setSourcePeriod}
         sourceMode={sourceMode}
@@ -161,6 +182,8 @@ export default function App() {
         onProbesPerLineChange={setProbesPerLine}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
+        showGrid={showGrid}
+        onShowGridChange={setShowGrid}
         onUndo={handleUndo}
         onResetFields={handleResetFields}
         onResetMaterials={handleResetMaterials}
@@ -172,11 +195,15 @@ export default function App() {
           tool={tool}
           brush={brush}
           brushRadius={brushRadius}
+          polarization={polarization}
+          onPolarizationChange={handlePolarizationChange}
+          sourcePolarization={sourcePolarization}
           sourcePeriod={sourcePeriod}
           sourceMode={sourceMode}
           sourceWaveform={sourceWaveform}
           modulation={modulation}
           viewMode={viewMode}
+          showGrid={showGrid}
           probes={probes}
           probesPerLine={probesPerLine}
           onProbesPlaced={handleProbesPlaced}

@@ -1,69 +1,39 @@
-import eShaderSrc from '../shaders/fdtd-e.wgsl?raw'
-import hShaderSrc from '../shaders/fdtd-h.wgsl?raw'
-import envShaderSrc from '../shaders/envelope.wgsl?raw'
-import sourceApplyShaderSrc from '../shaders/source-apply.wgsl?raw'
-import probeSampleShaderSrc from '../shaders/probe-sample.wgsl?raw'
-import renderShaderSrc from '../shaders/field-render.wgsl?raw'
+import eShaderSrc from '../shaders/fdtd-e-tez.wgsl?raw'
+import hShaderSrc from '../shaders/fdtd-h-tez.wgsl?raw'
+import envShaderSrc from '../shaders/envelope-tez.wgsl?raw'
+import sourceApplyShaderSrc from '../shaders/source-apply-tez.wgsl?raw'
+import probeSampleShaderSrc from '../shaders/probe-sample-tez.wgsl?raw'
+import renderShaderSrc from '../shaders/field-render-tez.wgsl?raw'
 import type { GPUContext } from './init'
+import {
+  FLAG_PEC,
+  MAX_PROBES,
+  MAX_SOURCES,
+  PROBE_HISTORY_LEN,
+  type BrushSpec,
+  type FDTDEngine,
+  type MaterialSnapshot,
+  type ModulationParams,
+  type ProbeHistorySnapshot,
+  type ProbeSpec,
+  type SourceMode,
+  type SourcePolarization,
+  type SourceSpec,
+  type SourceWaveform,
+  type ViewMode,
+} from './fdtd'
 
+// Imported constants from fdtd.ts so they stay aligned across engines.
 const MAX_FIELD_DIM = 1024
 const SC = 1 / Math.SQRT2
-
-// Reference period for the Df→σ conversion. See ADR 0003.
 const REFERENCE_PERIOD = 80
-
 const STEPS_PER_FRAME = 4
 
-// Maximum number of simultaneous sources. Drives the sources storage buffer
-// size and the source-apply workgroup count. See ADR 0006. 128 lets the PCB
-// scenes use port columns spanning a substrate gap without silent clamping.
-export const MAX_SOURCES = 128
-
-// Probe storage limits. See ADR 0008. 1024 samples × 240 sample/s = ~4 s window.
-// 32 × 1024 × 4 = 128 KB of GPU + 128 KB of staging — still trivial.
-export const MAX_PROBES = 32
-export const PROBE_HISTORY_LEN = 1024
-
-export function dfToSigma(dk: number, df: number): number {
-  return ((2 * Math.PI) / REFERENCE_PERIOD) * dk * df / SC
-}
-
-// Berenger split-field PML — see ADR M3 notes.
 const PML_THICKNESS = 12
 const PML_ORDER = 3
 const PML_TARGET_R = 1e-6
 const SIGMA_MAX =
   (-(PML_ORDER + 1) * Math.log(PML_TARGET_R)) / (2 * PML_THICKNESS)
-
-export const FLAG_PEC = 1
-
-// Active engine polarizations. '3D' is reserved for M9 — UI lists it as a
-// disabled option but the engine factory only accepts the two below.
-export type Polarization = 'TMz' | 'TEz'
-
-export type SourceMode = 'off' | 'cw' | 'pulse'
-export type SourceWaveform = 'sine' | 'square' | 'triangle' | 'sawtooth' | 'am' | 'fm'
-
-// Internal mode name is polarization-agnostic. Each engine interprets it:
-//   TMz: 'ez' → signed Ez,         'magnitude' → envelope of |Ez|
-//   TEz: 'ez' → signed Hz,         'magnitude' → envelope of |E| = sqrt(Ex²+Ey²)
-export type ViewMode = 'ez' | 'magnitude'
-
-// Source field component. 'z' = Ez (TMz default), 'y' = Ey vertical voltage
-// (TEz default), 'x' = Ex horizontal. TMz engine ignores this and always
-// drives Ez; TEz engine reads it and treats 'z' as 'y' for compatibility.
-export type SourcePolarization = 'z' | 'x' | 'y'
-
-export interface ModulationParams {
-  // Modulator period in timesteps (independent of carrier period).
-  modPeriod: number
-  // AM modulation depth, 0 (no AM) to 1 (100% AM).
-  amDepth: number
-  // FM modulation index, dimensionless. Typically 0–10.
-  fmIndex: number
-  // Square-wave edge sharpness. 1 ≈ sine, 50+ ≈ ideal square.
-  squareEdge: number
-}
 
 const DEFAULT_MOD: ModulationParams = {
   modPeriod: 400,
@@ -72,65 +42,14 @@ const DEFAULT_MOD: ModulationParams = {
   squareEdge: 20,
 }
 
-export interface SourceSpec {
-  x: number
-  y: number
-  phase: number
-  amplitude: number
-  // Optional — TEz uses 'y' (default) or 'x'. TMz ignores.
-  polarization?: SourcePolarization
-}
+const POL_X: number = 1
+const POL_Y: number = 2
 
-export interface ProbeSpec {
-  x: number
-  y: number
-}
-
-export interface ProbeHistorySnapshot {
-  // Flat MAX_PROBES × PROBE_HISTORY_LEN array. Slot p · PROBE_HISTORY_LEN + i
-  // holds sample i for probe p. Sample at offset `head` is the oldest;
-  // `head − 1` (mod PROBE_HISTORY_LEN) is the newest.
-  shadow: Float32Array
-  head: number
-  historyLen: number
-  probeCount: number
-}
-
-export interface BrushSpec {
-  epsilonR: number
-  sigma: number
-  pec: boolean
-}
-
-export interface MaterialSnapshot {
-  epsSig: Float32Array
-  flags: Uint32Array
-}
-
-export interface FDTDEngine {
-  polarization: Polarization
-  resize: (cssWidth: number, cssHeight: number) => void
-  step: () => void
-  destroy: () => void
-  paint: (gridX: number, gridY: number, brushRadius: number, brush: BrushSpec) => void
-  paintRect: (x0: number, y0: number, x1: number, y1: number, brush: BrushSpec) => void
-  resetMaterials: () => void
-  resetFields: () => void
-  setSources: (sources: SourceSpec[]) => void
-  getSources: () => SourceSpec[]
-  placeSource: (gridX: number, gridY: number) => void
-  setSourcePeriod: (period: number) => void
-  setSourceMode: (mode: SourceMode) => void
-  setSourceWaveform: (waveform: SourceWaveform) => void
-  setModulation: (params: Partial<ModulationParams>) => void
-  firePulse: () => void
-  setViewMode: (mode: ViewMode) => void
-  setProbes: (probes: ProbeSpec[]) => void
-  getProbeHistory: () => ProbeHistorySnapshot
-  snapshotMaterials: () => MaterialSnapshot
-  restoreMaterials: (snapshot: MaterialSnapshot) => void
-  getDims: () => { width: number; height: number }
-  pmlThickness: number
+function polarizationToU32(p: SourcePolarization | undefined): number {
+  if (p === 'x') return POL_X
+  // 'y', 'z', or undefined → drive Ey (the default sensible choice for a
+  // TMz-authored scene loaded under TEz). See ADR 0009.
+  return POL_Y
 }
 
 function fieldDimsFromCanvas(w: number, h: number): [number, number] {
@@ -174,19 +93,10 @@ function buildPMLAxis(len: number): Float32Array {
   return out
 }
 
-export function createFDTD(gpu: GPUContext): FDTDEngine {
+export function createFDTD_TEz(gpu: GPUContext): FDTDEngine {
   const { device, context, format } = gpu
 
-  // Uniforms layout (48 bytes) — must match the WGSL struct in every shader.
-  //   0: size: vec2<u32>           (W, H)
-  //   8: source_count: u32
-  //  12: pml_thickness: u32
-  //  16: sc: f32
-  //  20: view_mode: u32
-  //  24: probe_count: u32
-  //  28: history_head: u32
-  //  32: history_len: u32
-  //  36: _pad × 3 u32
+  // Same 48-byte uniform layout as TMz — see fdtd.ts for the field map.
   const uniformBuffer = device.createBuffer({
     size: 48,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -196,14 +106,13 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   const uniformF32 = new Float32Array(uniformBytes)
   uniformU32[3] = PML_THICKNESS
   uniformF32[4] = SC
-  uniformU32[5] = 0 // view_mode = Ez by default
+  uniformU32[5] = 0
   uniformU32[8] = PROBE_HISTORY_LEN
 
   function writeUniforms() {
     device.queue.writeBuffer(uniformBuffer, 0, uniformBytes)
   }
 
-  // Sources buffer: MAX_SOURCES × 16 bytes. Allocated once, never resized.
   const sourcesBuffer = device.createBuffer({
     size: MAX_SOURCES * 16,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -212,7 +121,6 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   const sourcesU32 = new Uint32Array(sourcesBytes)
   const sourcesF32 = new Float32Array(sourcesBytes)
 
-  // Probes buffer: MAX_PROBES × 8 bytes (vec2<u32>). Allocated once.
   const probesBuffer = device.createBuffer({
     size: MAX_PROBES * 8,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
@@ -220,8 +128,6 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   const probesBytes = new ArrayBuffer(MAX_PROBES * 8)
   const probesU32 = new Uint32Array(probesBytes)
 
-  // History buffer: MAX_PROBES × PROBE_HISTORY_LEN × 4 bytes. GPU side; written
-  // by probe-sample, copied to staging each frame for CPU readback.
   const HISTORY_BYTES = MAX_PROBES * PROBE_HISTORY_LEN * 4
   const historyBuffer = device.createBuffer({
     size: HISTORY_BYTES,
@@ -282,10 +188,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     primitive: { topology: 'triangle-list' },
   })
 
-  let ezxBuffer: GPUBuffer | null = null
-  let ezyBuffer: GPUBuffer | null = null
-  let hxBuffer: GPUBuffer | null = null
-  let hyBuffer: GPUBuffer | null = null
+  let exBuffer: GPUBuffer | null = null
+  let eyBuffer: GPUBuffer | null = null
+  let hzxBuffer: GPUBuffer | null = null
+  let hzyBuffer: GPUBuffer | null = null
   let pmlXBuffer: GPUBuffer | null = null
   let pmlYBuffer: GPUBuffer | null = null
   let materialBuffer: GPUBuffer | null = null
@@ -321,12 +227,12 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
 
   function resize(cssWidth: number, cssHeight: number) {
     const [w, h] = fieldDimsFromCanvas(cssWidth, cssHeight)
-    if (w === fieldW && h === fieldH && ezxBuffer) return
+    if (w === fieldW && h === fieldH && exBuffer) return
 
-    ezxBuffer?.destroy()
-    ezyBuffer?.destroy()
-    hxBuffer?.destroy()
-    hyBuffer?.destroy()
+    exBuffer?.destroy()
+    eyBuffer?.destroy()
+    hzxBuffer?.destroy()
+    hzyBuffer?.destroy()
     pmlXBuffer?.destroy()
     pmlYBuffer?.destroy()
     materialBuffer?.destroy()
@@ -343,10 +249,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
 
     const fieldBytes = w * h * 4
     const fieldUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
-    ezxBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
-    ezyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
-    hxBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
-    hyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    exBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    eyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    hzxBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    hzyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
     materialBuffer = device.createBuffer({ size: fieldBytes * 2, usage: fieldUsage })
     flagsBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
     envBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
@@ -368,10 +274,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       layout: ePipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: ezxBuffer } },
-        { binding: 2, resource: { buffer: ezyBuffer } },
-        { binding: 3, resource: { buffer: hxBuffer } },
-        { binding: 4, resource: { buffer: hyBuffer } },
+        { binding: 1, resource: { buffer: exBuffer } },
+        { binding: 2, resource: { buffer: eyBuffer } },
+        { binding: 3, resource: { buffer: hzxBuffer } },
+        { binding: 4, resource: { buffer: hzyBuffer } },
         { binding: 5, resource: { buffer: pmlXBuffer } },
         { binding: 6, resource: { buffer: pmlYBuffer } },
         { binding: 7, resource: { buffer: materialBuffer } },
@@ -382,10 +288,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       layout: hPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: ezxBuffer } },
-        { binding: 2, resource: { buffer: ezyBuffer } },
-        { binding: 3, resource: { buffer: hxBuffer } },
-        { binding: 4, resource: { buffer: hyBuffer } },
+        { binding: 1, resource: { buffer: hzxBuffer } },
+        { binding: 2, resource: { buffer: hzyBuffer } },
+        { binding: 3, resource: { buffer: exBuffer } },
+        { binding: 4, resource: { buffer: eyBuffer } },
         { binding: 5, resource: { buffer: pmlXBuffer } },
         { binding: 6, resource: { buffer: pmlYBuffer } },
       ],
@@ -395,16 +301,16 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: { buffer: sourcesBuffer } },
-        { binding: 2, resource: { buffer: ezxBuffer } },
-        { binding: 3, resource: { buffer: ezyBuffer } },
+        { binding: 2, resource: { buffer: exBuffer } },
+        { binding: 3, resource: { buffer: eyBuffer } },
       ],
     })
     envBindGroup = device.createBindGroup({
       layout: envPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: ezxBuffer } },
-        { binding: 2, resource: { buffer: ezyBuffer } },
+        { binding: 1, resource: { buffer: exBuffer } },
+        { binding: 2, resource: { buffer: eyBuffer } },
         { binding: 3, resource: { buffer: envBuffer } },
       ],
     })
@@ -413,8 +319,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
         { binding: 1, resource: { buffer: probesBuffer } },
-        { binding: 2, resource: { buffer: ezxBuffer } },
-        { binding: 3, resource: { buffer: ezyBuffer } },
+        { binding: 2, resource: { buffer: hzxBuffer } },
+        { binding: 3, resource: { buffer: hzyBuffer } },
         { binding: 4, resource: { buffer: historyBuffer } },
       ],
     })
@@ -422,8 +328,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       layout: renderPipeline.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: uniformBuffer } },
-        { binding: 1, resource: { buffer: ezxBuffer } },
-        { binding: 2, resource: { buffer: ezyBuffer } },
+        { binding: 1, resource: { buffer: hzxBuffer } },
+        { binding: 2, resource: { buffer: hzyBuffer } },
         { binding: 3, resource: { buffer: materialBuffer } },
         { binding: 4, resource: { buffer: flagsBuffer } },
         { binding: 5, resource: { buffer: envBuffer } },
@@ -437,13 +343,13 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     writeUniforms()
     uploadMaterials()
 
-    // Default scene: one CW source at center, matching the M5a out-of-box feel.
-    sources = [{ x: Math.floor(w / 2), y: Math.floor(h / 2), phase: 0, amplitude: 1 }]
+    sources = [
+      { x: Math.floor(w / 2), y: Math.floor(h / 2), phase: 0, amplitude: 1, polarization: 'y' },
+    ]
     uniformU32[2] = sources.length
     writeUniforms()
     writeSources()
 
-    // Clear probe history on resize (positions are now stale anyway).
     probes = []
     probeHistoryHead = 0
     probeHistoryShadow.fill(0)
@@ -458,12 +364,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       case 'sine':
         return Math.sin(phase)
       case 'square':
-        // Tanh-shaped square: edge=1 ≈ sine, edge=50 ≈ ideal square.
         return Math.tanh(modulation.squareEdge * Math.sin(phase))
       case 'triangle':
         return (2 / Math.PI) * Math.asin(Math.sin(phase))
       case 'sawtooth': {
-        // Normalize phase to [0, 2π), then map to [-1, 1].
         const t = ((phase % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
         return t / Math.PI - 1
       }
@@ -499,6 +403,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       sourcesU32[4 * i + 0] = s.x
       sourcesU32[4 * i + 1] = s.y
       sourcesF32[4 * i + 2] = evaluateSource(s)
+      sourcesU32[4 * i + 3] = polarizationToU32(s.polarization)
     }
     device.queue.writeBuffer(sourcesBuffer, 0, sourcesBytes)
   }
@@ -518,7 +423,6 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         probeReadbackState = 'idle'
       })
       .catch((err) => {
-        // Surface mapping failures but don't crash the loop — next frame retries.
         console.error('probe readback mapAsync failed', err)
         probeReadbackState = 'idle'
       })
@@ -540,13 +444,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     const workgroupsY = Math.ceil(fieldH / 8)
 
     for (let s = 0; s < STEPS_PER_FRAME; s++) {
-      // Auto-retire a finished pulse so the next Fire is clean.
       if (sourceMode === 'pulse' && pulseT0 >= 0) {
         const dt = (stepCount - pulseT0) / sourcePeriod
         if (dt > 5) pulseT0 = -1
       }
-      // Update history head BEFORE writing uniforms so the probe-sample pass
-      // sees the slot it should write to.
       uniformU32[7] = probeHistoryHead
       writeUniforms()
       writeSources()
@@ -675,12 +576,12 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   }
 
   function resetFields() {
-    if (!ezxBuffer || !ezyBuffer || !hxBuffer || !hyBuffer || !envBuffer) return
+    if (!exBuffer || !eyBuffer || !hzxBuffer || !hzyBuffer || !envBuffer) return
     const zeros = new Float32Array(fieldW * fieldH)
-    device.queue.writeBuffer(ezxBuffer, 0, zeros)
-    device.queue.writeBuffer(ezyBuffer, 0, zeros)
-    device.queue.writeBuffer(hxBuffer, 0, zeros)
-    device.queue.writeBuffer(hyBuffer, 0, zeros)
+    device.queue.writeBuffer(exBuffer, 0, zeros)
+    device.queue.writeBuffer(eyBuffer, 0, zeros)
+    device.queue.writeBuffer(hzxBuffer, 0, zeros)
+    device.queue.writeBuffer(hzyBuffer, 0, zeros)
     device.queue.writeBuffer(envBuffer, 0, zeros)
     stepCount = 0
     pulseT0 = -1
@@ -692,6 +593,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       y: Math.max(0, Math.min(fieldH - 1, Math.floor(s.y))),
       phase: s.phase,
       amplitude: s.amplitude,
+      polarization: s.polarization,
     }))
     uniformU32[2] = sources.length
     writeUniforms()
@@ -703,7 +605,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   }
 
   function placeSource(gridX: number, gridY: number) {
-    setSources([{ x: gridX, y: gridY, phase: 0, amplitude: 1 }])
+    setSources([{ x: gridX, y: gridY, phase: 0, amplitude: 1, polarization: 'y' }])
   }
 
   function setSourcePeriod(period: number) {
@@ -741,15 +643,12 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       x: Math.max(0, Math.min(fieldW - 1, Math.floor(p.x))),
       y: Math.max(0, Math.min(fieldH - 1, Math.floor(p.y))),
     }))
-    // Pack positions into the storage buffer.
     new Uint8Array(probesBytes).fill(0)
     for (let i = 0; i < probes.length; i++) {
       probesU32[2 * i + 0] = probes[i].x
       probesU32[2 * i + 1] = probes[i].y
     }
     device.queue.writeBuffer(probesBuffer, 0, probesBytes)
-    // Reset history when probe list changes so old probes' samples don't
-    // bleed into the new probes' slots.
     probeHistoryHead = 0
     probeHistoryShadow.fill(0)
     device.queue.writeBuffer(historyBuffer, 0, new Float32Array(MAX_PROBES * PROBE_HISTORY_LEN))
@@ -793,10 +692,10 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   }
 
   function destroy() {
-    ezxBuffer?.destroy()
-    ezyBuffer?.destroy()
-    hxBuffer?.destroy()
-    hyBuffer?.destroy()
+    exBuffer?.destroy()
+    eyBuffer?.destroy()
+    hzxBuffer?.destroy()
+    hzyBuffer?.destroy()
     pmlXBuffer?.destroy()
     pmlYBuffer?.destroy()
     materialBuffer?.destroy()
@@ -810,7 +709,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   }
 
   return {
-    polarization: 'TMz',
+    polarization: 'TEz',
     resize,
     step,
     destroy,

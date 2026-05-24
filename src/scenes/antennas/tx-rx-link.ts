@@ -20,6 +20,7 @@ export const txRxLink: Scene = {
   name: 'TX → RX link (directivity demo)',
   description:
     'Yagi transmitter on the left, three passive RX dipoles on the right (on-axis + two off-axis). Probes at each feed gap show how much voltage the RX picks up. On-axis RX gets the full beam; off-axis RX dipoles get the side-lobe scraps.',
+  polarization: 'TMz',
   apply: (engine, { width: W, height: H }) => {
     const period = 80
     engine.resetMaterials()
@@ -33,9 +34,10 @@ export const txRxLink: Scene = {
 
     // --- TX Yagi (4 elements) ---
     const txCx = Math.floor(W * 0.18)
-    const drivenHalf = Math.floor(λ * 0.25)
-    const reflectorHalf = Math.floor(λ * 0.275)
-    const directorHalf = Math.floor(λ * 0.2)
+    // Same length convention as yagi-uda.ts — resonant driven at ~0.475λ tip-to-tip.
+    const drivenHalf = Math.max(2, Math.floor(λ * 0.21))
+    const reflectorHalf = drivenHalf + 1
+    const directorHalf = Math.max(2, drivenHalf - 1)
     const gap = 2
     const reflectorSpacing = Math.floor(λ * 0.25)
     const directorSpacing = Math.floor(λ * 0.3)

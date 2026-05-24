@@ -21,8 +21,16 @@
   border-bottom: 1px solid #222;
   display: flex;
   gap: 16px;
-  align-items: baseline;
+  align-items: center;
   flex-wrap: wrap;
+}
+
+.polarization-toggle {
+  font-size: 12px;
+}
+
+.polarization-toggle .seg-btn {
+  padding: 4px 10px;
 }
 
 .header h1 {
@@ -229,6 +237,17 @@
 .seg-btn--active {
   background: #2a3a55;
   color: #fff;
+}
+
+.seg-btn--disabled,
+.seg-btn:disabled {
+  color: #555;
+  cursor: not-allowed;
+}
+
+.seg-btn--disabled:hover,
+.seg-btn:disabled:hover {
+  background: #1a1a22;
 }
 
 .examples-sidebar {
@@ -572,6 +591,15 @@ canvas {
   pointer-events: none;
   background: transparent;
   border: 1px solid transparent;
+}
+
+/* Stacking order inside .canvas-stack:
+ *   field canvas (base)
+ *   grid-canvas  (helper λ grid, decorative)
+ *   overlay-canvas (probe drag preview, transient)
+ * The plain .overlay-canvas without .grid-canvas paints last (highest stack). */
+.grid-canvas {
+  z-index: 1;
 }
 
 .error {
