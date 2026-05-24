@@ -1,13 +1,20 @@
 // Field renderer — instantaneous Ez (red/blue) or time-averaged magnitude
-// envelope (heat ramp). Overlays material tint and a source-position marker.
+// envelope (heat ramp). Overlays material tint and a cyan ring at every
+// source position (iterates the sources buffer).
 
 struct Uniforms {
   size: vec2<u32>,
-  source: vec2<u32>,
-  source_value: f32,
-  sc: f32,
+  source_count: u32,
   pml_thickness: u32,
+  sc: f32,
   view_mode: u32,
+  _pad: vec2<u32>,
+};
+
+struct Source {
+  pos: vec2<u32>,
+  value: f32,
+  _pad: u32,
 };
 
 const FLAG_PEC: u32 = 1u;
@@ -20,6 +27,7 @@ const VIEW_MAG: u32 = 1u;
 @group(0) @binding(3) var<storage, read> material: array<vec2<f32>>;
 @group(0) @binding(4) var<storage, read> flags: array<u32>;
 @group(0) @binding(5) var<storage, read> env: array<f32>;
+@group(0) @binding(6) var<storage, read> sources: array<Source>;
 
 struct VsOut {
   @builtin(position) pos: vec4<f32>,
@@ -37,8 +45,6 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
 }
 
 const DISPLAY_GAIN: f32 = 3.0;
-// sqrt compression in magnitude view: faint scattered/diffracted fields
-// (env ≈ 0.01) become visible without the bright source area pegging white.
 const MAG_GAIN: f32 = 1.6;
 
 fn material_bg(er: f32, s: f32, pec: bool) -> vec3<f32> {
@@ -48,7 +54,6 @@ fn material_bg(er: f32, s: f32, pec: bool) -> vec3<f32> {
   return lossy_tint + diel_tint;
 }
 
-// Black → red → yellow → white heat ramp for magnitude view.
 fn heat_color(v: f32) -> vec3<f32> {
   let t = clamp(v, 0.0, 1.0);
   return vec3<f32>(
@@ -56,6 +61,22 @@ fn heat_color(v: f32) -> vec3<f32> {
     clamp(t * 3.0 - 1.0, 0.0, 1.0),
     clamp(t * 3.0 - 2.0, 0.0, 1.0),
   );
+}
+
+// Cyan ring at Chebyshev distance 3-4 from any source. Returns true if this
+// pixel is on a marker — caller short-circuits to the marker color.
+fn is_source_marker(i: u32, j: u32) -> bool {
+  let n = u.source_count;
+  for (var s = 0u; s < n; s = s + 1u) {
+    let p = sources[s].pos;
+    let dx = i32(i) - i32(p.x);
+    let dy = i32(j) - i32(p.y);
+    let cheby = max(abs(dx), abs(dy));
+    if (cheby == 3 || cheby == 4) {
+      return true;
+    }
+  }
+  return false;
 }
 
 @fragment
@@ -85,13 +106,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     result = clamp(bg + field, vec3<f32>(0.0), vec3<f32>(1.0));
   }
 
-  // Source marker: 2-cell-thick cyan ring. Cyan contrasts both the red/blue Ez
-  // colormap and the red/yellow/white heat ramp, so the source stays visible
-  // in either view mode and at any source state.
-  let dx = i32(i) - i32(u.source.x);
-  let dy = i32(j) - i32(u.source.y);
-  let cheby = max(abs(dx), abs(dy));
-  if (cheby == 3 || cheby == 4) {
+  if (is_source_marker(i, j)) {
     return vec4<f32>(0.0, 0.85, 1.0, 1.0);
   }
 

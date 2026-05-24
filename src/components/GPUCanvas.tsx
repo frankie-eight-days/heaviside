@@ -8,6 +8,7 @@ import {
   type SourceMode,
   type ViewMode,
 } from '../gpu/fdtd'
+import type { Scene, SceneConfig } from '../scenes/types'
 
 const MAX_UNDO = 10
 
@@ -18,6 +19,7 @@ export interface GPUCanvasHandle {
   resetMaterials: () => void
   resetFields: () => void
   firePulse: () => void
+  applyScene: (scene: Scene) => SceneConfig | null
   canUndo: () => boolean
 }
 
@@ -92,6 +94,17 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     },
     firePulse: () => {
       engineRef.current?.firePulse()
+    },
+    applyScene: (scene) => {
+      const engine = engineRef.current
+      if (!engine) return null
+      const dims = engine.getDims()
+      if (dims.width === 0 || dims.height === 0) return null
+      // Scenes mutate materials freely; drop the undo stack so a stale
+      // pre-scene snapshot doesn't restore half the previous layout.
+      undoStackRef.current = []
+      onUndoStackChange(false)
+      return scene.apply(engine, dims)
     },
     canUndo: () => undoStackRef.current.length > 0,
   }))
@@ -178,7 +191,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     const g = eventToGrid(e)
     if (!g) return
     if (toolRef.current === 'source') {
-      engine.setSource(g[0], g[1])
+      engine.placeSource(g[0], g[1])
       return
     }
     e.currentTarget.setPointerCapture(e.pointerId)

@@ -1,15 +1,13 @@
-// PML-aware Yee H-update for 2D TMz.
-// Materials (other than μ_r ≠ 1, not currently supported) don't affect the
-// H-update — only the E-update sees ε_r and σ. Uniform struct matches the
-// E shader (same uniform buffer is bound to both pipelines).
+// PML-aware Yee H-update for 2D TMz. Uniform struct matches the rest of the
+// pipelines (same uniform buffer is bound to all of them).
 
 struct Uniforms {
   size: vec2<u32>,
-  source: vec2<u32>,
-  source_value: f32,
-  sc: f32,
+  source_count: u32,
   pml_thickness: u32,
+  sc: f32,
   view_mode: u32,
+  _pad: vec2<u32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

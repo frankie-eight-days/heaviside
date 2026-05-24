@@ -1,9 +1,19 @@
 .app {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  grid-template-rows: auto auto 1fr;
+  grid-template-areas:
+    "header  header"
+    "sidebar toolbar"
+    "sidebar main";
   flex: 1;
   min-height: 0;
 }
+
+.header { grid-area: header; }
+.examples-sidebar { grid-area: sidebar; }
+.toolbar { grid-area: toolbar; }
+.canvas-wrap { grid-area: main; }
 
 .header {
   padding: 12px 20px;
@@ -197,8 +207,84 @@
   color: #fff;
 }
 
+.examples-sidebar {
+  background: #0c0c12;
+  border-right: 1px solid #222;
+  padding: 12px 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.examples-header {
+  padding: 0 16px 8px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #555;
+}
+
+.examples-section {
+  margin-bottom: 4px;
+}
+
+.examples-category {
+  margin: 12px 16px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #777;
+}
+
+.examples-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.examples-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  color: #ccc;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.examples-item:hover {
+  background: #14141c;
+}
+
+.examples-item--active {
+  background: #1a1a26;
+  border-left-color: #6a8aaa;
+  color: #fff;
+}
+
+.examples-item-name {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.examples-item-desc {
+  font-size: 11px;
+  color: #777;
+  line-height: 1.4;
+}
+
+.examples-item:hover .examples-item-desc {
+  color: #888;
+}
+
 .canvas-wrap {
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;

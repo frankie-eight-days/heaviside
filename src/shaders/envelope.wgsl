@@ -1,14 +1,15 @@
-// Peak-with-decay envelope of |Ez|. Runs once per timestep after the E update.
-// env[k] = max(env[k] * DECAY, |Ez[k]|)
+// Peak-with-decay envelope of |Ez|. Runs once per timestep after the E and
+// source-apply passes so the envelope sees the source-overridden field.
+// env[k] = max(env[k] * DECAY, |Ez[k]|).
 // Decay half-life ≈ 230 steps. See docs/decisions/0004.
 
 struct Uniforms {
   size: vec2<u32>,
-  source: vec2<u32>,
-  source_value: f32,
-  sc: f32,
+  source_count: u32,
   pml_thickness: u32,
+  sc: f32,
   view_mode: u32,
+  _pad: vec2<u32>,
 };
 
 const DECAY: f32 = 0.997;

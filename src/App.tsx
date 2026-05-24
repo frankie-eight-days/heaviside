@@ -6,7 +6,9 @@ import Toolbar, {
   MAT_SOURCE,
   type MaterialPreset,
 } from './components/Toolbar'
+import ExamplesSidebar from './components/ExamplesSidebar'
 import { dfToSigma, type BrushSpec, type SourceMode, type ViewMode } from './gpu/fdtd'
+import { ALL_SCENES, type Scene } from './scenes'
 import './App.css'
 
 export default function App() {
@@ -18,6 +20,7 @@ export default function App() {
   const [sourceMode, setSourceMode] = useState<SourceMode>('cw')
   const [viewMode, setViewMode] = useState<ViewMode>('ez')
   const [canUndo, setCanUndo] = useState(false)
+  const [activeSceneId, setActiveSceneId] = useState<string | null>(null)
   const canvasHandle = useRef<GPUCanvasHandle | null>(null)
 
   const tool: Tool = material === MAT_SOURCE ? 'source' : 'paint'
@@ -52,7 +55,16 @@ export default function App() {
     canvasHandle.current?.firePulse()
   }, [])
 
-  // Cmd/Ctrl+Z for undo, space bar to fire a pulse when in Pulse mode.
+  const handleSceneSelect = useCallback((scene: Scene) => {
+    const cfg = canvasHandle.current?.applyScene(scene)
+    if (cfg) {
+      setSourcePeriod(cfg.sourcePeriod)
+      setSourceMode(cfg.sourceMode)
+      setViewMode(cfg.viewMode)
+    }
+    setActiveSceneId(scene.id)
+  }, [])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
@@ -76,10 +88,14 @@ export default function App() {
       <header className="header">
         <h1>EM Playground</h1>
         <span className="subtitle">
-          Paint materials, place a source, watch waves interact. Magnitude view
-          shows radiation patterns.
+          Paint materials, place sources, load examples. Magnitude view shows radiation patterns.
         </span>
       </header>
+      <ExamplesSidebar
+        scenes={ALL_SCENES}
+        activeSceneId={activeSceneId}
+        onSelect={handleSceneSelect}
+      />
       <Toolbar
         material={material}
         onMaterialChange={setMaterial}
