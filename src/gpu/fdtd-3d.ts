@@ -844,6 +844,19 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   // Initial uniform write so the first frame has correct dims.
   writeUniforms()
 
+  // Default centered source so toggling to 3D shows *something* without
+  // requiring a scene click — mirrors what 2D engines do inside resize().
+  setSources3D([
+    {
+      x: Math.floor(W / 2),
+      y: Math.floor(H / 2),
+      z: Math.floor(D / 2),
+      phase: 0,
+      amplitude: 1,
+      polarization: 'z',
+    },
+  ])
+
   return {
     polarization: '3D',
     resize,
