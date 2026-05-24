@@ -16,16 +16,18 @@ Two polarization engines run side-by-side, selectable via a header toggle — **
 src/
 ├── gpu/
 │   ├── init.ts          WebGPU adapter / device / canvas context setup
-│   ├── fdtd.ts          TMz engine factory + shared types (Polarization, SourceSpec, FDTDEngine…)
+│   ├── fdtd.ts          TMz engine factory + shared types (Polarization, SourceSpec, FDTDEngine, FDTDEngine3D…)
 │   ├── fdtd-tez.ts      TEz engine factory — same FDTDEngine interface, fields are Ex/Ey/Hz
+│   ├── fdtd-3d.ts       3D engine factory — six compute pipelines, CPML, FDTDEngine3D interface
 │   └── engine.ts        Polarization-aware factory used by GPUCanvas
 ├── shaders/
-│   ├── fdtd-e.wgsl, fdtd-h.wgsl         TMz E/H Yee updates
-│   ├── fdtd-e-tez.wgsl, fdtd-h-tez.wgsl TEz E/H Yee updates (Hz split for PML)
-│   ├── source-apply{,-tez}.wgsl         Per-step source writes (Ez vs Ex/Ey)
-│   ├── envelope{,-tez}.wgsl             |Ez| / |E| peak-with-decay envelopes
-│   ├── probe-sample{,-tez}.wgsl         Per-step probe writes (Ez vs Hz)
-│   └── field-render{,-tez}.wgsl         Fullscreen-triangle renderers
+│   ├── fdtd-e.wgsl, fdtd-h.wgsl              TMz E/H Yee updates
+│   ├── fdtd-e-tez.wgsl, fdtd-h-tez.wgsl      TEz E/H Yee updates (Hz split for PML)
+│   ├── fdtd-{ex,ey,ez,hx,hy,hz}-3d.wgsl      3D component updates (CPML, per-cell material on E shaders)
+│   ├── source-apply{,-tez,-3d}.wgsl          Per-step source writes
+│   ├── envelope{,-tez}.wgsl                  |Ez| / |E| peak-with-decay envelopes (M9c+ for 3D)
+│   ├── probe-sample{,-tez,-3d}.wgsl          Per-step probe writes
+│   └── field-render{,-tez,-3d}.wgsl          Fullscreen-triangle renderers
 ├── components/
 │   ├── GPUCanvas.tsx    React wrapper. Owns engine lifecycle; swaps engines on polarization change.
 │   ├── Toolbar.tsx      Brush palette, sliders, source controls (incl. Ex/Ey in TEz), view toggle.
@@ -54,8 +56,17 @@ Compute-then-render per frame: H pass → E pass → envelope pass (per FDTD sub
 - [x] **M7b — VSWR + multi-probe analysis.** Probe tool supports click-drag for a line of probes (N controlled by a slider, max 32 probes total). Overlay canvas previews the line during drag. MeasurementPanel computes VSWR + |Γ| + return loss from max/min `|Ez|` across all probes. Per-probe metrics in the list: peak, RMS, phase relative to P1 (derived from FFT bin at source frequency). Spectrum plot gets a Linear/dB toggle with a −60 dB floor.
 - [x] **M7c — Waveform generators.** Source modulation: sine / square (with tanh-shaped edge sharpness slider) / triangle / sawtooth / AM (carrier × `(1 + m·sin(ω_m t))`) / FM (`sin(ω_c t + β·sin(ω_m t))`). All computed JS-side in `evaluateSource()`; no shader work. Square / sawtooth excite harmonic combs visible in the spectrum analyzer; AM produces sidebands, FM produces Bessel-shaped multi-peaks.
 - [x] **M8 — 2D TEz polarization variant.** Parallel engine alongside TMz, selected via header segmented control. Hz out of page, Ey vertical between conductors — the textbook quasi-TEM mode that microstrip / stripline / differential pair actually want. PCB scenes rewritten as TEz; antenna scenes stay TMz. Scene-level polarization tag auto-switches the engine on load. Source brush gains an Ex/Ey selector when the active polarization is TEz. See [ADR 0009](docs/decisions/0009-tez-polarization-fork.md).
+- [~] **M9 — 3D FDTD.** Multi-phase. Active engine alongside TMz/TEz; selected via the same header toggle (3D button now active). See [ADR 0010](docs/decisions/0010-3d-fdtd-fork.md).
+  - [x] **M9a — Engine foundation.** Yee lattice with six field components, six split compute pipelines (one per E/H component). Source-apply with xyz polarization. XY-slice renderer (samples Ez at view_depth). Default 128³ grid.
+  - [x] **M9b — CPML on all six faces.** σ-only CPML (κ=1, α=0) with packed ψ vec2 buffers per component and per-axis (b_E, a_E, b_H, a_H) coefficient tables. ψ pass-through outside the absorber so vacuum cells cost zero overhead.
+  - [x] **M9c — Materials + 3D probes.** Per-cell (εr, σ) material buffer with σ < 0 as the PEC sentinel (fits inside the 8-storage-buffer-per-stage limit without a separate flags array). 3D probes mirror the 2D primitive — vec4 positions + ring-buffer history + mapAsync readback into MeasurementPanel.
+  - [ ] **M9d — Slice UI + paint-on-slice.** 1/2/3 slice modes, slice-axis picker (xy/xz/yz), depth sliders. Toolbar slice controls. paint() already targets view_depth — just needs the axis/depth picker UI.
+  - [ ] **M9e — Volumetric ray-march.** Per-pixel ray through the 3D buffer with orbit camera (θ, φ, zoom).
+  - [ ] **M9f — Isosurfaces.** Marching-cubes compute pass; iso-level slider.
+  - [ ] **M9g — 3D scenes.** Vertical λ/2 dipole (real donut pattern), quarter-wave monopole / ground, patch antenna, 3D Yagi, slot.
+  - [ ] **M9h — Far-field transform (optional).** Huygens surface + near-to-far projection → polar plot in MeasurementPanel.
+  - [ ] **M9i — Polish.** Scene-list filtering by polarization, default landing experience handling, handoff.
 - [ ] **M7d — S-parameters.** Reference-run de-embedding (run scene with matched load, store incident wave, subtract from total to get reflected). S11 magnitude + phase plot. Optional dB scale on the spectrum analyzer.
-- [ ] **M9 — 3D FDTD.** Extend to 3D. Volume rendering with slice planes. Real polarization, near-to-far-field transforms for quantitative radiation patterns in dBi.
 
 ## Decisions
 
@@ -71,6 +82,7 @@ Current ADRs:
 - [0007 — Scenes as TypeScript modules with imperative apply](docs/decisions/0007-scene-format.md)
 - [0008 — Probe primitive: GPU ring buffer + mapAsync readback](docs/decisions/0008-probe-primitive.md)
 - [0009 — TEz polarization fork (parallel engine, header toggle)](docs/decisions/0009-tez-polarization-fork.md)
+- [0010 — 3D FDTD fork (CPML, slice/volume/iso viz, parallel FDTDEngine3D)](docs/decisions/0010-3d-fdtd-fork.md)
 
 ## Dev
 
