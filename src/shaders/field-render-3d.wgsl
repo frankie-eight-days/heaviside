@@ -147,17 +147,17 @@ fn render_volume(uv: vec2<f32>) -> vec4<f32> {
   let W = f32(u.size.x);
   let H = f32(u.size.y);
   let D = f32(u.size.z);
-  let target = vec3<f32>(W * 0.5, H * 0.5, D * 0.5);
+  let view_center = vec3<f32>(W * 0.5, H * 0.5, D * 0.5);
 
   let cos_phi = cos(cam.phi);
   let sin_phi = sin(cam.phi);
-  let cam_pos = target + cam.distance * vec3<f32>(
+  let cam_pos = view_center + cam.distance * vec3<f32>(
     cos_phi * cos(cam.theta),
     sin_phi,
     cos_phi * sin(cam.theta),
   );
 
-  let forward = normalize(target - cam_pos);
+  let forward = normalize(view_center - cam_pos);
   let world_up = vec3<f32>(0.0, 1.0, 0.0);
   let right = normalize(cross(forward, world_up));
   let cam_up = cross(right, forward);
