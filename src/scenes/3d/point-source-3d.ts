@@ -2,14 +2,14 @@ import type { Scene } from '../types'
 import type { FDTDEngine3D } from '../../gpu/fdtd'
 
 export const pointSource3D: Scene = {
-  id: '3d-point-source',
+  id: '3d-hertzian',
   category: '3d',
-  name: 'Point source (smoke test)',
+  name: 'Hertzian dipole',
   description:
-    'Centered Ez-polarized point source in a 128³ vacuum cube with CPML absorbing all six faces. Watch the XY midplane slice — concentric oscillations radiate outward and should fade into the boundary without visible reflection.',
+    'A single point source — the infinitesimal antenna. Ez-polarized at the cube center, drives a spherical wave that decays as 1/r. XY slice shows the broadside ring (max in the plane perpendicular to the source). XZ / YZ slices show a clean rotationally-symmetric pattern.',
   polarization: '3D',
   apply: (engine, _dims) => {
-    const period = 60
+    const period = 100
     const engine3D = engine as FDTDEngine3D
     engine3D.resetFields()
     engine3D.setSourcePeriod(period)
