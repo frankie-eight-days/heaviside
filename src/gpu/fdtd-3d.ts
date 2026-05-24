@@ -5,9 +5,11 @@ import hxShaderSrc from '../shaders/fdtd-hx-3d.wgsl?raw'
 import hyShaderSrc from '../shaders/fdtd-hy-3d.wgsl?raw'
 import hzShaderSrc from '../shaders/fdtd-hz-3d.wgsl?raw'
 import sourceApplyShaderSrc from '../shaders/source-apply-3d.wgsl?raw'
+import probeSampleShaderSrc from '../shaders/probe-sample-3d.wgsl?raw'
 import renderShaderSrc from '../shaders/field-render-3d.wgsl?raw'
 import type { GPUContext } from './init'
 import {
+  MAX_PROBES,
   MAX_SOURCES,
   PROBE_HISTORY_LEN,
   type BrushSpec,
@@ -201,6 +203,40 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   const sourcesU32 = new Uint32Array(sourcesBytes)
   const sourcesF32 = new Float32Array(sourcesBytes)
 
+  // Material buffer — vec2<f32>(εr, σ) per cell. σ < 0 sentinel = PEC.
+  // 16 MB at 128³, 128 MB at 256³ (under WebGPU's 256 MB maxBufferSize).
+  const materialBytes = W * H * D * 8
+  const materialBuffer = device.createBuffer({
+    size: materialBytes,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+  // JS-side mirror of the material grid. epsSig[2k] = εr, epsSig[2k+1] = σ.
+  const epsSigGrid = new Float32Array(W * H * D * 2)
+  for (let i = 0; i < W * H * D; i++) epsSigGrid[2 * i] = 1.0 // vacuum εr
+  device.queue.writeBuffer(materialBuffer, 0, epsSigGrid)
+
+  // Probes — vec4<u32>(x, y, z, _pad) per probe.
+  const probesBuffer = device.createBuffer({
+    size: MAX_PROBES * 16,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+  })
+  const probesBytes = new ArrayBuffer(MAX_PROBES * 16)
+  const probesU32 = new Uint32Array(probesBytes)
+
+  const HISTORY_BYTES = MAX_PROBES * PROBE_HISTORY_LEN * 4
+  const historyBuffer = device.createBuffer({
+    size: HISTORY_BYTES,
+    usage:
+      GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+  })
+  const probeStagingBuffer = device.createBuffer({
+    size: HISTORY_BYTES,
+    usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
+  })
+  const probeHistoryShadow = new Float32Array(MAX_PROBES * PROBE_HISTORY_LEN)
+  type ReadbackState = 'idle' | 'in-flight'
+  let probeReadbackState: ReadbackState = 'idle'
+
   // Compute pipelines (one per E + H component, plus source-apply).
   const exPipeline = device.createComputePipeline({
     layout: 'auto',
@@ -233,6 +269,13 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       entryPoint: 'main',
     },
   })
+  const probeSamplePipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: device.createShaderModule({ code: probeSampleShaderSrc }),
+      entryPoint: 'main',
+    },
+  })
 
   const renderModule = device.createShaderModule({ code: renderShaderSrc })
   const renderPipeline = device.createRenderPipeline({
@@ -246,8 +289,9 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     primitive: { topology: 'triangle-list' },
   })
 
-  // Bind groups — each E/H shader binds: uniform, target field, two curl-input
-  // fields, ψ pack, and the two axis PML coefficient tables.
+  // Bind groups — each E shader binds: uniform, target field, two curl-input
+  // fields, ψ pack, two axis PML tables, plus the material buffer (per-cell
+  // εr and σ). H shaders skip material (μ=1 everywhere in our model).
   const exBindGroup = device.createBindGroup({
     layout: exPipeline.getBindGroupLayout(0),
     entries: [
@@ -258,6 +302,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 4, resource: { buffer: psiExBuf } },
       { binding: 5, resource: { buffer: pmlYBuf } },
       { binding: 6, resource: { buffer: pmlZBuf } },
+      { binding: 7, resource: { buffer: materialBuffer } },
     ],
   })
   const eyBindGroup = device.createBindGroup({
@@ -270,6 +315,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 4, resource: { buffer: psiEyBuf } },
       { binding: 5, resource: { buffer: pmlZBuf } },
       { binding: 6, resource: { buffer: pmlXBuf } },
+      { binding: 7, resource: { buffer: materialBuffer } },
     ],
   })
   const ezBindGroup = device.createBindGroup({
@@ -282,6 +328,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 4, resource: { buffer: psiEzBuf } },
       { binding: 5, resource: { buffer: pmlXBuf } },
       { binding: 6, resource: { buffer: pmlYBuf } },
+      { binding: 7, resource: { buffer: materialBuffer } },
     ],
   })
   const hxBindGroup = device.createBindGroup({
@@ -330,6 +377,15 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 4, resource: { buffer: ezBuf } },
     ],
   })
+  const probeSampleBindGroup = device.createBindGroup({
+    layout: probeSamplePipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: probesBuffer } },
+      { binding: 2, resource: { buffer: ezBuf } },
+      { binding: 3, resource: { buffer: historyBuffer } },
+    ],
+  })
   const renderBindGroup = device.createBindGroup({
     layout: renderPipeline.getBindGroupLayout(0),
     entries: [
@@ -345,6 +401,16 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   const modulation: ModulationParams = { ...DEFAULT_MOD }
   let pulseT0 = -1
   let sources: SourceSpec3D[] = []
+  let probes: ProbeSpec3D[] = []
+  let probeHistoryHead = 0
+
+  function uploadMaterial() {
+    device.queue.writeBuffer(materialBuffer, 0, epsSigGrid)
+  }
+
+  function cellIndex(i: number, j: number, k: number): number {
+    return i + j * W + k * W * H
+  }
 
   function waveformValue(phase: number): number {
     switch (sourceWaveform) {
@@ -466,8 +532,20 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
         srcPass.end()
       }
 
+      if (probes.length > 0) {
+        // history_head needs to point at the slot to be written this step.
+        uniformU32[11] = probeHistoryHead
+        writeUniforms()
+        const probePass = encoder.beginComputePass()
+        probePass.setPipeline(probeSamplePipeline)
+        probePass.setBindGroup(0, probeSampleBindGroup)
+        probePass.dispatchWorkgroups(1)
+        probePass.end()
+      }
+
       device.queue.submit([encoder.finish()])
       stepCount++
+      probeHistoryHead = (probeHistoryHead + 1) % PROBE_HISTORY_LEN
     }
 
     const encoder = device.createCommandEncoder()
@@ -486,6 +564,28 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     renderPass.draw(3)
     renderPass.end()
     device.queue.submit([encoder.finish()])
+
+    tryStartProbeReadback()
+  }
+
+  function tryStartProbeReadback() {
+    if (probes.length === 0 || probeReadbackState !== 'idle') return
+    const encoder = device.createCommandEncoder()
+    encoder.copyBufferToBuffer(historyBuffer, 0, probeStagingBuffer, 0, HISTORY_BYTES)
+    device.queue.submit([encoder.finish()])
+    probeReadbackState = 'in-flight'
+    probeStagingBuffer
+      .mapAsync(GPUMapMode.READ)
+      .then(() => {
+        const view = new Float32Array(probeStagingBuffer.getMappedRange())
+        probeHistoryShadow.set(view)
+        probeStagingBuffer.unmap()
+        probeReadbackState = 'idle'
+      })
+      .catch((err) => {
+        console.error('3D probe readback mapAsync failed', err)
+        probeReadbackState = 'idle'
+      })
   }
 
   function resetFields() {
@@ -595,32 +695,110 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     writeUniforms()
   }
 
-  // 2D probe primitive — M9c implements 3D probes; this maps to (x, y, midplane).
-  function setProbes(_specs: ProbeSpec[]) {
-    // no-op until M9c
+  function setProbes3D(specs: ProbeSpec3D[]) {
+    probes = specs.slice(0, MAX_PROBES).map((p) => ({
+      x: Math.max(0, Math.min(W - 1, Math.floor(p.x))),
+      y: Math.max(0, Math.min(H - 1, Math.floor(p.y))),
+      z: Math.max(0, Math.min(D - 1, Math.floor(p.z))),
+    }))
+    new Uint8Array(probesBytes).fill(0)
+    for (let i = 0; i < probes.length; i++) {
+      const base = i * 4 // vec4<u32> stride
+      probesU32[base + 0] = probes[i].x
+      probesU32[base + 1] = probes[i].y
+      probesU32[base + 2] = probes[i].z
+    }
+    device.queue.writeBuffer(probesBuffer, 0, probesBytes)
+    probeHistoryHead = 0
+    probeHistoryShadow.fill(0)
+    device.queue.writeBuffer(historyBuffer, 0, new Float32Array(MAX_PROBES * PROBE_HISTORY_LEN))
+    uniformU32[10] = probes.length
+    uniformU32[11] = 0
+    writeUniforms()
   }
 
-  function setProbes3D(_specs: ProbeSpec3D[]) {
-    // no-op until M9c
+  // 2D-shaped setProbes maps to (x, y, current view depth).
+  function setProbes(specs: ProbeSpec[]) {
+    setProbes3D(specs.map((p) => ({ x: p.x, y: p.y, z: uniformU32[8] })))
   }
 
   function getProbeHistory(): ProbeHistorySnapshot {
     return {
-      shadow: new Float32Array(0),
-      head: 0,
+      shadow: probeHistoryShadow,
+      head: probeHistoryHead,
       historyLen: PROBE_HISTORY_LEN,
-      probeCount: 0,
+      probeCount: probes.length,
     }
   }
 
-  // Material grid not yet implemented — M9c.
-  function paint(_x: number, _y: number, _r: number, _brush: BrushSpec) {}
-  function paintRect(_x0: number, _y0: number, _x1: number, _y1: number, _brush: BrushSpec) {}
-  function resetMaterials() {}
-  function snapshotMaterials(): MaterialSnapshot {
-    return { epsSig: new Float32Array(0), flags: new Uint32Array(0) }
+  // Paint a disk on the current XY slice at view_depth. M9d will support
+  // painting on XZ/YZ slices and add a thickness control. PML cells are
+  // protected — material there must stay at vacuum for the absorber to work.
+  // PEC encoded as σ = -1 sentinel; otherwise σ is the brush conductivity.
+  function paint(gridX: number, gridY: number, brushRadius: number, brush: BrushSpec) {
+    const z = uniformU32[8]
+    if (z < PML_THICKNESS_3D || z + PML_THICKNESS_3D >= D) return
+    const r = Math.max(0, Math.floor(brushRadius))
+    const r2 = r * r
+    const xMin = Math.max(PML_THICKNESS_3D, gridX - r)
+    const xMax = Math.min(W - PML_THICKNESS_3D - 1, gridX + r)
+    const yMin = Math.max(PML_THICKNESS_3D, gridY - r)
+    const yMax = Math.min(H - PML_THICKNESS_3D - 1, gridY + r)
+    const er = brush.epsilonR
+    const sg = brush.pec ? -1.0 : brush.sigma
+    for (let j = yMin; j <= yMax; j++) {
+      for (let i = xMin; i <= xMax; i++) {
+        const dx = i - gridX
+        const dy = j - gridY
+        if (dx * dx + dy * dy <= r2) {
+          const cell = cellIndex(i, j, z)
+          epsSigGrid[2 * cell] = er
+          epsSigGrid[2 * cell + 1] = sg
+        }
+      }
+    }
+    uploadMaterial()
   }
-  function restoreMaterials(_snapshot: MaterialSnapshot) {}
+
+  function paintRect(x0: number, y0: number, x1: number, y1: number, brush: BrushSpec) {
+    const z = uniformU32[8]
+    if (z < PML_THICKNESS_3D || z + PML_THICKNESS_3D >= D) return
+    const xMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(x0, x1)))
+    const xMax = Math.min(W - PML_THICKNESS_3D - 1, Math.floor(Math.max(x0, x1)))
+    const yMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(y0, y1)))
+    const yMax = Math.min(H - PML_THICKNESS_3D - 1, Math.floor(Math.max(y0, y1)))
+    const er = brush.epsilonR
+    const sg = brush.pec ? -1.0 : brush.sigma
+    for (let j = yMin; j <= yMax; j++) {
+      for (let i = xMin; i <= xMax; i++) {
+        const cell = cellIndex(i, j, z)
+        epsSigGrid[2 * cell] = er
+        epsSigGrid[2 * cell + 1] = sg
+      }
+    }
+    uploadMaterial()
+  }
+
+  function resetMaterials() {
+    for (let i = 0; i < W * H * D; i++) {
+      epsSigGrid[2 * i] = 1.0
+      epsSigGrid[2 * i + 1] = 0
+    }
+    uploadMaterial()
+  }
+
+  function snapshotMaterials(): MaterialSnapshot {
+    return {
+      epsSig: new Float32Array(epsSigGrid),
+      flags: new Uint32Array(0), // PEC packed into σ sentinel; no separate flag grid
+    }
+  }
+
+  function restoreMaterials(snapshot: MaterialSnapshot) {
+    if (snapshot.epsSig.length !== epsSigGrid.length) return
+    epsSigGrid.set(snapshot.epsSig)
+    uploadMaterial()
+  }
 
   function resize(_cssWidth: number, _cssHeight: number) {
     // 3D field dims are fixed at engine creation; canvas resize doesn't
@@ -655,6 +833,10 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     pmlXBuf.destroy()
     pmlYBuf.destroy()
     pmlZBuf.destroy()
+    materialBuffer.destroy()
+    probesBuffer.destroy()
+    historyBuffer.destroy()
+    probeStagingBuffer.destroy()
     sourcesBuffer.destroy()
     uniformBuffer.destroy()
   }

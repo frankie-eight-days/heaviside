@@ -25,6 +25,7 @@ struct Uniforms {
 @group(0) @binding(4) var<storage, read_write> psi_ey: array<vec2<f32>>;
 @group(0) @binding(5) var<storage, read> pml_z: array<vec4<f32>>;
 @group(0) @binding(6) var<storage, read> pml_x: array<vec4<f32>>;
+@group(0) @binding(7) var<storage, read> material: array<vec2<f32>>;
 
 fn idx(i: u32, j: u32, k: u32) -> u32 {
   return i + j * u.size.x + k * u.size.x * u.size.y;
@@ -41,17 +42,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (i >= W || j >= H || k >= D) { return; }
   if (k < 1u || i < 1u) { return; }
 
+  let cell = idx(i, j, k);
+  let mat = material[cell];
+  if (mat.y < 0.0) {
+    ey[cell] = 0.0;
+    return;
+  }
+
   let curlHx = hx[idx(i, j, k)] - hx[idx(i, j, k - 1u)];
   let curlHz = hz[idx(i, j, k)] - hz[idx(i - 1u, j, k)];
 
   let pz = pml_z[k];
   let px = pml_x[i];
 
-  let cell = idx(i, j, k);
   var psi = psi_ey[cell];
   psi.x = pz.x * psi.x + pz.y * curlHx;
   psi.y = px.x * psi.y + px.y * curlHz;
   psi_ey[cell] = psi;
 
-  ey[cell] = ey[cell] + u.sc * (curlHx - curlHz + psi.x - psi.y);
+  let er = mat.x;
+  let loss = mat.y * u.sc / (2.0 * er);
+  let denom = 1.0 + loss;
+  let ca = (1.0 - loss) / denom;
+  let cb = (u.sc / er) / denom;
+  ey[cell] = ca * ey[cell] + cb * (curlHx - curlHz + psi.x - psi.y);
 }

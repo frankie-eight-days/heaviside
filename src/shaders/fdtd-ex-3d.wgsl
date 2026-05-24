@@ -35,6 +35,9 @@ struct Uniforms {
 @group(0) @binding(4) var<storage, read_write> psi_ex: array<vec2<f32>>;
 @group(0) @binding(5) var<storage, read> pml_y: array<vec4<f32>>;
 @group(0) @binding(6) var<storage, read> pml_z: array<vec4<f32>>;
+// Material is vec2(εr, σ). σ < 0 is a sentinel marking PEC cells (saves a
+// separate flags buffer — see M9c rationale in handoff.md).
+@group(0) @binding(7) var<storage, read> material: array<vec2<f32>>;
 
 fn idx(i: u32, j: u32, k: u32) -> u32 {
   return i + j * u.size.x + k * u.size.x * u.size.y;
@@ -51,20 +54,33 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   if (i >= W || j >= H || k >= D) { return; }
   if (j < 1u || k < 1u) { return; }  // curl needs j-1 and k-1
 
+  let cell = idx(i, j, k);
+  let mat = material[cell];
+
+  // PEC sentinel: σ < 0 means perfect conductor. Tangential E is clamped;
+  // ψ at this cell is left untouched (the field doesn't propagate into PEC).
+  if (mat.y < 0.0) {
+    ex[cell] = 0.0;
+    return;
+  }
+
   let curlHz = hz[idx(i, j, k)] - hz[idx(i, j - 1u, k)];
   let curlHy = hy[idx(i, j, k)] - hy[idx(i, j, k - 1u)];
 
-  // pml axis coefs at the E-position (.x = b_E, .y = a_E, .z/.w = H coefs).
-  // κ would live alongside but is fixed at 1 in this simplified CPML.
   let py = pml_y[j];
   let pz = pml_z[k];
 
-  let cell = idx(i, j, k);
   var psi = psi_ex[cell];
-  // ψ recurrence — uses curl values from the just-updated H field.
   psi.x = py.x * psi.x + py.y * curlHz;
   psi.y = pz.x * psi.y + pz.y * curlHy;
   psi_ex[cell] = psi;
 
-  ex[cell] = ex[cell] + u.sc * (curlHz - curlHy + psi.x - psi.y);
+  // Lossy material coefficients (same form as 2D). For vacuum εr=1, σ=0 →
+  // ca=1, cb=sc, reducing to the vacuum update.
+  let er = mat.x;
+  let loss = mat.y * u.sc / (2.0 * er);
+  let denom = 1.0 + loss;
+  let ca = (1.0 - loss) / denom;
+  let cb = (u.sc / er) / denom;
+  ex[cell] = ca * ex[cell] + cb * (curlHz - curlHy + psi.x - psi.y);
 }
