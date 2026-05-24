@@ -1,4 +1,9 @@
-import type { SourceMode, ViewMode } from '../gpu/fdtd'
+import type {
+  ModulationParams,
+  SourceMode,
+  SourceWaveform,
+  ViewMode,
+} from '../gpu/fdtd'
 
 export const MAT_VACUUM = 0
 export const MAT_PEC = 1
@@ -61,6 +66,18 @@ const SOURCE_MODES: { id: SourceMode; label: string }[] = [
   { id: 'pulse', label: 'Pulse' },
 ]
 
+const WAVEFORMS: { id: SourceWaveform; label: string }[] = [
+  { id: 'sine', label: 'Sine' },
+  { id: 'square', label: 'Square' },
+  { id: 'triangle', label: 'Triangle' },
+  { id: 'sawtooth', label: 'Sawtooth' },
+  { id: 'am', label: 'AM' },
+  { id: 'fm', label: 'FM' },
+]
+
+const TIP_WAVEFORM =
+  "Source waveform. Square and Sawtooth excite a comb of harmonics — watch the spectrum analyzer fill up. AM produces carrier ± modulator sidebands. FM produces a Bessel-shaped multi-peak comb."
+
 // Convert between user-facing wavelength (in cells) and the engine's source
 // period (in timesteps). λ_cells = period · Sc, with Sc = 1/√2.
 const SC = 1 / Math.SQRT2
@@ -85,6 +102,10 @@ interface ToolbarProps {
   onSourcePeriodChange: (v: number) => void
   sourceMode: SourceMode
   onSourceModeChange: (m: SourceMode) => void
+  sourceWaveform: SourceWaveform
+  onSourceWaveformChange: (w: SourceWaveform) => void
+  modulation: ModulationParams
+  onModulationChange: (params: Partial<ModulationParams>) => void
   onFirePulse: () => void
   viewMode: ViewMode
   onViewModeChange: (m: ViewMode) => void
@@ -108,6 +129,10 @@ export default function Toolbar({
   onSourcePeriodChange,
   sourceMode,
   onSourceModeChange,
+  sourceWaveform,
+  onSourceWaveformChange,
+  modulation,
+  onModulationChange,
   onFirePulse,
   viewMode,
   onViewModeChange,
@@ -117,6 +142,7 @@ export default function Toolbar({
   canUndo,
 }: ToolbarProps) {
   const wavelength = periodToWavelength(sourcePeriod)
+  const modWavelength = periodToWavelength(modulation.modPeriod)
 
   return (
     <div className="toolbar">
@@ -195,6 +221,86 @@ export default function Toolbar({
             />
             <span className="param-value">{Math.round(wavelength)}</span>
           </label>
+          <label className="param-select" title={TIP_WAVEFORM}>
+            Waveform <span className="info-glyph">ⓘ</span>
+            <select
+              className="waveform-select"
+              value={sourceWaveform}
+              onChange={(e) => onSourceWaveformChange(e.target.value as SourceWaveform)}
+            >
+              {WAVEFORMS.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {sourceWaveform === 'square' && (
+            <label className="param-slider">
+              Edge
+              <input
+                type="range"
+                min={1}
+                max={50}
+                step={1}
+                value={modulation.squareEdge}
+                onChange={(e) =>
+                  onModulationChange({ squareEdge: Number(e.target.value) })
+                }
+              />
+              <span className="param-value">{modulation.squareEdge}</span>
+            </label>
+          )}
+          {(sourceWaveform === 'am' || sourceWaveform === 'fm') && (
+            <label className="param-slider">
+              mod λ
+              <input
+                type="range"
+                min={20}
+                max={400}
+                step={1}
+                value={Math.round(modWavelength)}
+                onChange={(e) =>
+                  onModulationChange({
+                    modPeriod: wavelengthToPeriod(Number(e.target.value)),
+                  })
+                }
+              />
+              <span className="param-value">{Math.round(modWavelength)}</span>
+            </label>
+          )}
+          {sourceWaveform === 'am' && (
+            <label className="param-slider">
+              depth
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={modulation.amDepth}
+                onChange={(e) =>
+                  onModulationChange({ amDepth: Number(e.target.value) })
+                }
+              />
+              <span className="param-value">{modulation.amDepth.toFixed(2)}</span>
+            </label>
+          )}
+          {sourceWaveform === 'fm' && (
+            <label className="param-slider">
+              β
+              <input
+                type="range"
+                min={0}
+                max={10}
+                step={0.1}
+                value={modulation.fmIndex}
+                onChange={(e) =>
+                  onModulationChange({ fmIndex: Number(e.target.value) })
+                }
+              />
+              <span className="param-value">{modulation.fmIndex.toFixed(1)}</span>
+            </label>
+          )}
           <div className="segmented">
             {SOURCE_MODES.map((m) => (
               <button

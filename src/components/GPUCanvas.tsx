@@ -5,9 +5,11 @@ import {
   type BrushSpec,
   type FDTDEngine,
   type MaterialSnapshot,
+  type ModulationParams,
   type ProbeHistorySnapshot,
   type ProbeSpec,
   type SourceMode,
+  type SourceWaveform,
   type ViewMode,
 } from '../gpu/fdtd'
 import type { Scene, SceneConfig } from '../scenes/types'
@@ -32,6 +34,8 @@ interface GPUCanvasProps {
   brushRadius: number
   sourcePeriod: number
   sourceMode: SourceMode
+  sourceWaveform: SourceWaveform
+  modulation: ModulationParams
   viewMode: ViewMode
   probes: ProbeSpec[]
   onProbePlaced: (gridX: number, gridY: number) => void
@@ -45,6 +49,8 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     brushRadius,
     sourcePeriod,
     sourceMode,
+    sourceWaveform,
+    modulation,
     viewMode,
     probes,
     onProbePlaced,
@@ -76,6 +82,12 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   useEffect(() => {
     engineRef.current?.setSourceMode(sourceMode)
   }, [sourceMode])
+  useEffect(() => {
+    engineRef.current?.setSourceWaveform(sourceWaveform)
+  }, [sourceWaveform])
+  useEffect(() => {
+    engineRef.current?.setModulation(modulation)
+  }, [modulation])
   useEffect(() => {
     engineRef.current?.setViewMode(viewMode)
   }, [viewMode])
@@ -156,6 +168,8 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
         engine.resize(lastW, lastH)
         engine.setSourcePeriod(sourcePeriod)
         engine.setSourceMode(sourceMode)
+        engine.setSourceWaveform(sourceWaveform)
+        engine.setModulation(modulation)
         engine.setViewMode(viewMode)
         engine.setProbes(probes)
         engineRef.current = engine

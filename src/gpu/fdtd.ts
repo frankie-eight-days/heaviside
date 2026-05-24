@@ -37,7 +37,26 @@ const SIGMA_MAX =
 export const FLAG_PEC = 1
 
 export type SourceMode = 'off' | 'cw' | 'pulse'
+export type SourceWaveform = 'sine' | 'square' | 'triangle' | 'sawtooth' | 'am' | 'fm'
 export type ViewMode = 'ez' | 'magnitude'
+
+export interface ModulationParams {
+  // Modulator period in timesteps (independent of carrier period).
+  modPeriod: number
+  // AM modulation depth, 0 (no AM) to 1 (100% AM).
+  amDepth: number
+  // FM modulation index, dimensionless. Typically 0–10.
+  fmIndex: number
+  // Square-wave edge sharpness. 1 ≈ sine, 50+ ≈ ideal square.
+  squareEdge: number
+}
+
+const DEFAULT_MOD: ModulationParams = {
+  modPeriod: 400,
+  amDepth: 0.5,
+  fmIndex: 2,
+  squareEdge: 20,
+}
 
 export interface SourceSpec {
   x: number
@@ -84,6 +103,8 @@ export interface FDTDEngine {
   placeSource: (gridX: number, gridY: number) => void
   setSourcePeriod: (period: number) => void
   setSourceMode: (mode: SourceMode) => void
+  setSourceWaveform: (waveform: SourceWaveform) => void
+  setModulation: (params: Partial<ModulationParams>) => void
   firePulse: () => void
   setViewMode: (mode: ViewMode) => void
   setProbes: (probes: ProbeSpec[]) => void
@@ -266,6 +287,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
 
   let sourcePeriod = REFERENCE_PERIOD
   let sourceMode: SourceMode = 'cw'
+  let sourceWaveform: SourceWaveform = 'sine'
+  const modulation: ModulationParams = { ...DEFAULT_MOD }
   let pulseT0 = -1
   let sources: SourceSpec[] = []
   let probes: ProbeSpec[] = []
@@ -412,10 +435,36 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     device.queue.writeBuffer(historyBuffer, 0, new Float32Array(MAX_PROBES * PROBE_HISTORY_LEN))
   }
 
+  function waveformValue(phase: number): number {
+    switch (sourceWaveform) {
+      case 'sine':
+        return Math.sin(phase)
+      case 'square':
+        // Tanh-shaped square: edge=1 ≈ sine, edge=50 ≈ ideal square.
+        return Math.tanh(modulation.squareEdge * Math.sin(phase))
+      case 'triangle':
+        return (2 / Math.PI) * Math.asin(Math.sin(phase))
+      case 'sawtooth': {
+        // Normalize phase to [0, 2π), then map to [-1, 1].
+        const t = ((phase % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+        return t / Math.PI - 1
+      }
+      case 'am': {
+        const modPhase = (2 * Math.PI * stepCount) / modulation.modPeriod
+        const m = modulation.amDepth
+        return ((1 + m * Math.sin(modPhase)) * Math.sin(phase)) / (1 + m)
+      }
+      case 'fm': {
+        const modPhase = (2 * Math.PI * stepCount) / modulation.modPeriod
+        return Math.sin(phase + modulation.fmIndex * Math.sin(modPhase))
+      }
+    }
+  }
+
   function evaluateSource(spec: SourceSpec): number {
     if (sourceMode === 'off') return 0
     const phase = (2 * Math.PI * stepCount) / sourcePeriod + spec.phase
-    const carrier = Math.sin(phase) * spec.amplitude
+    const carrier = waveformValue(phase) * spec.amplitude
     if (sourceMode === 'cw') return carrier
     if (pulseT0 < 0) return 0
     const tau = sourcePeriod
@@ -644,6 +693,17 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     if (mode !== 'pulse') pulseT0 = -1
   }
 
+  function setSourceWaveform(waveform: SourceWaveform) {
+    sourceWaveform = waveform
+  }
+
+  function setModulation(params: Partial<ModulationParams>) {
+    if (params.modPeriod !== undefined) modulation.modPeriod = Math.max(4, params.modPeriod)
+    if (params.amDepth !== undefined) modulation.amDepth = Math.max(0, Math.min(1, params.amDepth))
+    if (params.fmIndex !== undefined) modulation.fmIndex = Math.max(0, params.fmIndex)
+    if (params.squareEdge !== undefined) modulation.squareEdge = Math.max(1, params.squareEdge)
+  }
+
   function firePulse() {
     if (sourceMode !== 'pulse') return
     pulseT0 = stepCount + Math.round(sourcePeriod * 0.5)
@@ -739,6 +799,8 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     placeSource,
     setSourcePeriod,
     setSourceMode,
+    setSourceWaveform,
+    setModulation,
     firePulse,
     setViewMode,
     setProbes,

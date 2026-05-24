@@ -12,8 +12,10 @@ import MeasurementPanel from './components/MeasurementPanel'
 import {
   dfToSigma,
   type BrushSpec,
+  type ModulationParams,
   type ProbeSpec,
   type SourceMode,
+  type SourceWaveform,
   type ViewMode,
 } from './gpu/fdtd'
 import { ALL_SCENES, type Scene } from './scenes'
@@ -26,6 +28,13 @@ export default function App() {
   const [df, setDf] = useState(0.02)
   const [sourcePeriod, setSourcePeriod] = useState(80)
   const [sourceMode, setSourceMode] = useState<SourceMode>('cw')
+  const [sourceWaveform, setSourceWaveform] = useState<SourceWaveform>('sine')
+  const [modulation, setModulation] = useState<ModulationParams>({
+    modPeriod: 400,
+    amDepth: 0.5,
+    fmIndex: 2,
+    squareEdge: 20,
+  })
   const [viewMode, setViewMode] = useState<ViewMode>('ez')
   const [canUndo, setCanUndo] = useState(false)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null)
@@ -63,6 +72,10 @@ export default function App() {
 
   const handleFirePulse = useCallback(() => {
     canvasHandle.current?.firePulse()
+  }, [])
+
+  const handleModulationChange = useCallback((params: Partial<ModulationParams>) => {
+    setModulation((prev) => ({ ...prev, ...params }))
   }, [])
 
   const handleProbePlaced = useCallback((x: number, y: number) => {
@@ -136,6 +149,10 @@ export default function App() {
         onSourcePeriodChange={setSourcePeriod}
         sourceMode={sourceMode}
         onSourceModeChange={setSourceMode}
+        sourceWaveform={sourceWaveform}
+        onSourceWaveformChange={setSourceWaveform}
+        modulation={modulation}
+        onModulationChange={handleModulationChange}
         onFirePulse={handleFirePulse}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
@@ -152,6 +169,8 @@ export default function App() {
           brushRadius={brushRadius}
           sourcePeriod={sourcePeriod}
           sourceMode={sourceMode}
+          sourceWaveform={sourceWaveform}
+          modulation={modulation}
           viewMode={viewMode}
           probes={probes}
           onProbePlaced={handleProbePlaced}
