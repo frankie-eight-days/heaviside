@@ -1,17 +1,18 @@
 import type { Scene } from '../types'
+import type { ProbeSpec } from '../../gpu/fdtd'
 import { PEC_BRUSH, materialBrush } from '../helpers'
 
 export const stripline: Scene = {
   id: 'pcb-stripline',
   category: 'pcb',
-  name: 'Stripline',
+  name: 'Stripline (2D parallel-plate analog)',
   description:
-    'Trace embedded between two PEC planes inside FR-4. Magnitude view shows the wave packet trail fully confined — no fringing into air like microstrip has.',
+    'Trace embedded between two PEC planes in FR-4 — field fully confined, no fringing into air. Same TMz caveat as microstrip: what propagates is the parallel-plate TM₁, not stripline TEM.',
   apply: (engine, { width: W, height: H }) => {
     engine.resetMaterials()
     engine.resetFields()
     engine.setSourcePeriod(80)
-    engine.setSourceMode('pulse')
+    engine.setSourceMode('cw')
     engine.setViewMode('magnitude')
 
     const FR4 = materialBrush(4.4, 0.02)
@@ -20,19 +21,23 @@ export const stripline: Scene = {
     const bottomY = traceY + 30
     const upperMidY = Math.floor((topY + traceY) / 2)
 
-    // FR-4 fills the entire chamber between the planes.
     engine.paintRect(0, topY + 2, W, bottomY - 1, FR4)
-    // Top ground plane.
     engine.paintRect(0, topY, W, topY + 2, PEC_BRUSH)
-    // Bottom ground plane.
     engine.paintRect(0, bottomY - 1, W, bottomY, PEC_BRUSH)
-    // Trace, centered between the planes.
     engine.paintRect(0, traceY, W, traceY + 1, PEC_BRUSH)
 
-    // Drive the upper half-channel (between top plane and trace). Stripline
-    // is symmetric, so a single half-drive excites a clean TM₁ mode.
     engine.setSources([{ x: 20, y: upperMidY, phase: 0, amplitude: 1 }])
-    engine.firePulse()
-    return { sourcePeriod: 80, sourceMode: 'pulse', viewMode: 'magnitude' }
+
+    // Probe line in the upper half-channel (where the source drives).
+    const probes: ProbeSpec[] = []
+    const xStart = 60
+    const xEnd = W - 60
+    const N = 8
+    for (let i = 0; i < N; i++) {
+      const t = i / (N - 1)
+      probes.push({ x: Math.round(xStart + t * (xEnd - xStart)), y: upperMidY })
+    }
+
+    return { sourcePeriod: 80, sourceMode: 'cw', viewMode: 'magnitude', probes }
   },
 }

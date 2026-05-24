@@ -5,6 +5,7 @@ import { yagiUda } from './antennas/yagi-uda'
 import { cornerReflector } from './antennas/corner-reflector'
 import { parabolicReflector } from './antennas/parabolic'
 import { broadsideArray } from './antennas/broadside-array'
+import { txRxLink } from './antennas/tx-rx-link'
 import { microstrip } from './pcb/microstrip'
 import { stripline } from './pcb/stripline'
 import { differentialPair } from './pcb/differential-pair'
@@ -18,6 +19,7 @@ export const ALL_SCENES: Scene[] = [
   cornerReflector,
   parabolicReflector,
   broadsideArray,
+  txRxLink,
   microstrip,
   stripline,
   differentialPair,

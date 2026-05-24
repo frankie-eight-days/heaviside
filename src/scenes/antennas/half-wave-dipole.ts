@@ -6,7 +6,7 @@ export const halfWaveDipole: Scene = {
   category: 'antennas',
   name: 'λ/2 dipole',
   description:
-    'Two PEC arms each λ/4 long with a feed gap at center. Magnitude shows the broadside (left/right) radiation lobes.',
+    'Two PEC arms each λ/4 long with a feed gap at center. Broadside probes (E/W) read strong; endfire probes (N/S) read the null — that asymmetry IS the figure-8 pattern.',
   apply: (engine, { width: W, height: H }) => {
     const period = 80
     engine.resetMaterials()
@@ -17,13 +17,30 @@ export const halfWaveDipole: Scene = {
 
     const cx = Math.floor(W / 2)
     const cy = Math.floor(H / 2)
-    const arm = Math.floor(wavelengthCells(period) / 4)
+    const λ = wavelengthCells(period)
+    const arm = Math.floor(λ / 4)
     const gap = 2
 
     engine.paintRect(cx - 1, cy - gap - arm, cx + 1, cy - gap - 1, PEC_BRUSH)
     engine.paintRect(cx - 1, cy + gap + 1, cx + 1, cy + gap + arm, PEC_BRUSH)
 
     engine.setSources([{ x: cx, y: cy, phase: 0, amplitude: 1 }])
-    return { sourcePeriod: period, sourceMode: 'cw', viewMode: 'magnitude' }
+
+    // P1, P2: broadside (east, west) at 1.5λ — should be strong.
+    // P3, P4: endfire (north, south) at 1.5λ — null direction, much weaker.
+    const r = Math.round(λ * 1.5)
+    const probes = [
+      { x: cx + r, y: cy },
+      { x: cx - r, y: cy },
+      { x: cx, y: cy - r },
+      { x: cx, y: cy + r },
+    ]
+
+    return {
+      sourcePeriod: period,
+      sourceMode: 'cw',
+      viewMode: 'magnitude',
+      probes,
+    }
   },
 }
