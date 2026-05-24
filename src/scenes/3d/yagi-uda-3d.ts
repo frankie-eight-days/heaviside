@@ -12,7 +12,7 @@ export const yagiUda3D: Scene = {
     'Four vertical PEC elements stacked along x — reflector behind, driven dipole, two directors in front. Source at the driven feed gap; parasitic elements re-radiate with phase delays that constructively interfere forward. XZ slice opens to show the antenna structure (vertical bars) and the forward beam shooting +x. Compare to the 2D Yagi — now genuinely 3D-directional.',
   polarization: '3D',
   apply: (engine, _dims) => {
-    const period = 100
+    const period = 60
     const engine3D = engine as FDTDEngine3D
     engine3D.resetMaterials()
     engine3D.resetFields()

@@ -12,7 +12,7 @@ export const horizontalDipole3D: Scene = {
     "Same dipole as the vertical one, rotated 90° to lie along the x-axis. Source polarization is now 'x'. XY slice shows the figure-8 cross-section (now horizontal in the canvas). YZ slice (perpendicular to the antenna) shows the full broadside ring. Same donut as the vertical case, just oriented around x.",
   polarization: '3D',
   apply: (engine, _dims) => {
-    const period = 100
+    const period = 60
     const engine3D = engine as FDTDEngine3D
     engine3D.resetMaterials()
     engine3D.resetFields()

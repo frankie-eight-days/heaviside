@@ -8,10 +8,10 @@ export const broadsideArray3D: Scene = {
   category: '3d',
   name: '2-element broadside array',
   description:
-    "Two Ez-polarized point sources spaced λ/2 along x, driven in phase. Broadside (along y, perpendicular to the array axis) the two wavefronts add constructively → strong lobe. Endfire (along x, the array axis) the half-λ path difference makes them cancel → null. XY slice opens to show the in-plane pattern.",
+    "Two Ez-polarized point sources spaced λ/2 along x, driven in phase. Broadside (along ±y, perpendicular to the array axis) the two wavefronts arrive in phase → strong lobe. Endfire (along ±x, the array axis) the λ/2 path difference makes them destructively cancel → null. XY slice opens to show the in-plane pattern. The key payoff is in the probe metrics: P1/P2 (broadside) should read several times stronger than P3/P4 (endfire).",
   polarization: '3D',
   apply: (engine, _dims) => {
-    const period = 100
+    const period = 60
     const engine3D = engine as FDTDEngine3D
     engine3D.resetMaterials()
     engine3D.resetFields()
@@ -32,7 +32,9 @@ export const broadsideArray3D: Scene = {
     ])
 
     // XY slice through z=cz. Sources sit as two cyan rings along the x axis.
-    // Probes ±x = endfire (null), ±y = broadside (strong).
+    // Probes ±x = endfire (null), ±y = broadside (strong). All probes are
+    // ≤1λ from the array center — fits comfortably in the 128³ vacuum
+    // region (PML occupies the outer 12 cells on each side).
     const probes: ProbeSpec[] = [
       // Broadside ±y at 1λ from center
       { x: cx, y: cy + Math.round(lambdaCells) },

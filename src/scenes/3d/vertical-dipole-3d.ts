@@ -12,7 +12,7 @@ export const verticalDipole3D: Scene = {
     'Two PEC arms along the z-axis with a feed gap at the center, driven by an Ez source. Opens in the XZ slice — the canonical figure-8 cross-section. Switch to XY to see the broadside ring. Switch to YZ for the same figure-8 rotated 90°. Volume mode reveals the full 3D donut.',
   polarization: '3D',
   apply: (engine, _dims) => {
-    const period = 100
+    const period = 60
     const engine3D = engine as FDTDEngine3D
     engine3D.resetMaterials()
     engine3D.resetFields()

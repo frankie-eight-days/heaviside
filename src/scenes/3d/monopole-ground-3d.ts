@@ -12,7 +12,7 @@ export const monopoleGround3D: Scene = {
     "A quarter-wave PEC arm pointing up out of a horizontal ground plane. Image theory says this is electrically equivalent to a λ/2 dipole — the ground reflects the upper donut downward into its mirror image. You see the upper half of the donut; below the ground is dark. XZ slice opens with the antenna vertical and the ground as a horizontal line.",
   polarization: '3D',
   apply: (engine, _dims) => {
-    const period = 100
+    const period = 60
     const engine3D = engine as FDTDEngine3D
     engine3D.resetMaterials()
     engine3D.resetFields()

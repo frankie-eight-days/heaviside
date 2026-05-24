@@ -9,7 +9,7 @@ export const pointSource3D: Scene = {
     'A single point source — the infinitesimal antenna. Ez-polarized at the cube center, drives a spherical wave that decays as 1/r. XY slice shows the broadside ring (max in the plane perpendicular to the source). XZ / YZ slices show a clean rotationally-symmetric pattern.',
   polarization: '3D',
   apply: (engine, _dims) => {
-    const period = 100
+    const period = 60
     const engine3D = engine as FDTDEngine3D
     engine3D.resetFields()
     engine3D.setSourcePeriod(period)
