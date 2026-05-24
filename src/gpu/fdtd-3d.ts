@@ -6,6 +6,7 @@ import hyShaderSrc from '../shaders/fdtd-hy-3d.wgsl?raw'
 import hzShaderSrc from '../shaders/fdtd-hz-3d.wgsl?raw'
 import sourceApplyShaderSrc from '../shaders/source-apply-3d.wgsl?raw'
 import probeSampleShaderSrc from '../shaders/probe-sample-3d.wgsl?raw'
+import envelopeShaderSrc from '../shaders/envelope-3d.wgsl?raw'
 import renderShaderSrc from '../shaders/field-render-3d.wgsl?raw'
 import type { GPUContext } from './init'
 import {
@@ -158,6 +159,8 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   const hxBuf = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
   const hyBuf = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
   const hzBuf = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+  // Peak-with-decay |E| envelope for the magnitude view.
+  const envBuf = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
 
   // CPML ψ memory variables — 6 packed buffers (vec2<f32> per cell). One
   // pair per field component, holding the two axis-conjugate ψ values.
@@ -276,6 +279,13 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       entryPoint: 'main',
     },
   })
+  const envPipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: device.createShaderModule({ code: envelopeShaderSrc }),
+      entryPoint: 'main',
+    },
+  })
 
   const renderModule = device.createShaderModule({ code: renderShaderSrc })
   const renderPipeline = device.createRenderPipeline({
@@ -386,11 +396,23 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 3, resource: { buffer: historyBuffer } },
     ],
   })
+  const envBindGroup = device.createBindGroup({
+    layout: envPipeline.getBindGroupLayout(0),
+    entries: [
+      { binding: 0, resource: { buffer: uniformBuffer } },
+      { binding: 1, resource: { buffer: exBuf } },
+      { binding: 2, resource: { buffer: eyBuf } },
+      { binding: 3, resource: { buffer: ezBuf } },
+      { binding: 4, resource: { buffer: envBuf } },
+    ],
+  })
   const renderBindGroup = device.createBindGroup({
     layout: renderPipeline.getBindGroupLayout(0),
     entries: [
       { binding: 0, resource: { buffer: uniformBuffer } },
       { binding: 1, resource: { buffer: ezBuf } },
+      { binding: 2, resource: { buffer: envBuf } },
+      { binding: 3, resource: { buffer: materialBuffer } },
     ],
   })
 
@@ -532,6 +554,12 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
         srcPass.end()
       }
 
+      const envPass = encoder.beginComputePass()
+      envPass.setPipeline(envPipeline)
+      envPass.setBindGroup(0, envBindGroup)
+      dispatchFieldCompute(envPass)
+      envPass.end()
+
       if (probes.length > 0) {
         // history_head needs to point at the slot to be written this step.
         uniformU32[11] = probeHistoryHead
@@ -597,6 +625,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     device.queue.writeBuffer(hxBuf, 0, fieldZeros)
     device.queue.writeBuffer(hyBuf, 0, fieldZeros)
     device.queue.writeBuffer(hzBuf, 0, fieldZeros)
+    device.queue.writeBuffer(envBuf, 0, fieldZeros)
     device.queue.writeBuffer(psiExBuf, 0, zeroPsi)
     device.queue.writeBuffer(psiEyBuf, 0, zeroPsi)
     device.queue.writeBuffer(psiEzBuf, 0, zeroPsi)
@@ -683,8 +712,9 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     pulseT0 = stepCount + Math.round(sourcePeriod * 0.5)
   }
 
-  function setViewMode(_mode: ViewMode) {
-    // M9c will add the magnitude envelope; for M9a only signed Ez exists.
+  function setViewMode(mode: ViewMode) {
+    uniformU32[9] = mode === 'magnitude' ? 1 : 0
+    writeUniforms()
   }
 
   function setViewSlice(axis: ViewAxis3D, depth: number) {
@@ -824,6 +854,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     hxBuf.destroy()
     hyBuf.destroy()
     hzBuf.destroy()
+    envBuf.destroy()
     psiExBuf.destroy()
     psiEyBuf.destroy()
     psiEzBuf.destroy()
