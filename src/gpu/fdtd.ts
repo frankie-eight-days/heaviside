@@ -46,7 +46,9 @@ export type SourceWaveform = 'sine' | 'square' | 'triangle' | 'sawtooth' | 'am' 
 // Internal mode name is polarization-agnostic. Each engine interprets it:
 //   TMz: 'ez' → signed Ez,         'magnitude' → envelope of |Ez|
 //   TEz: 'ez' → signed Hz,         'magnitude' → envelope of |E| = sqrt(Ex²+Ey²)
-export type ViewMode = 'ez' | 'magnitude'
+//   3D:  'ez' / 'magnitude' as above (slice), 'volume' → orbit-camera
+//        ray-march of the envelope. 2D engines treat 'volume' as 'ez'.
+export type ViewMode = 'ez' | 'magnitude' | 'volume'
 
 // Source field component. 'z' = Ez (TMz default), 'y' = Ey vertical voltage
 // (TEz default), 'x' = Ex horizontal. TMz engine ignores this and always
@@ -161,6 +163,7 @@ export interface FDTDEngine3D extends FDTDEngine {
   setProbes3D: (probes: ProbeSpec3D[]) => void
   getDims3D: () => { width: number; height: number; depth: number }
   setViewSlice: (axis: ViewAxis3D, depth: number) => void
+  setCameraOrbit: (theta: number, phi: number, distance: number, aspect: number) => void
 }
 
 function fieldDimsFromCanvas(w: number, h: number): [number, number] {
@@ -763,6 +766,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   }
 
   function setViewMode(mode: ViewMode) {
+    // 2D has no 'volume' — fall back to the signed view.
     uniformU32[5] = mode === 'magnitude' ? 1 : 0
     writeUniforms()
   }

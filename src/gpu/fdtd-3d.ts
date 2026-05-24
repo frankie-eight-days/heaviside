@@ -224,6 +224,22 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     size: MAX_PROBES * 16,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   })
+
+  // Camera uniform for the volume-render branch (16 bytes: theta, phi,
+  // distance, aspect). Separate buffer so updates don't touch the main
+  // uniform on every camera drag.
+  const cameraBuffer = device.createBuffer({
+    size: 16,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  })
+  const cameraBytes = new ArrayBuffer(16)
+  const cameraF32 = new Float32Array(cameraBytes)
+  // Sensible defaults: looking from upper-right-front, ~1.5× grid size out.
+  cameraF32[0] = Math.PI / 4
+  cameraF32[1] = Math.PI / 6
+  cameraF32[2] = Math.max(W, H, D) * 1.5
+  cameraF32[3] = 1.0
+  device.queue.writeBuffer(cameraBuffer, 0, cameraBytes)
   const probesBytes = new ArrayBuffer(MAX_PROBES * 16)
   const probesU32 = new Uint32Array(probesBytes)
 
@@ -416,6 +432,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 3, resource: { buffer: materialBuffer } },
       { binding: 4, resource: { buffer: sourcesBuffer } },
       { binding: 5, resource: { buffer: probesBuffer } },
+      { binding: 6, resource: { buffer: cameraBuffer } },
     ],
   })
 
@@ -734,13 +751,26 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   }
 
   function setViewMode(mode: ViewMode) {
-    uniformU32[9] = mode === 'magnitude' ? 1 : 0
+    let code = 0
+    if (mode === 'magnitude') code = 1
+    else if (mode === 'volume') code = 2
+    uniformU32[9] = code
     writeUniforms()
   }
 
   function setDisplayGain(g: number) {
     uniformF32[13] = Math.max(0.1, g)
     writeUniforms()
+  }
+
+  function setCameraOrbit(theta: number, phi: number, distance: number, aspect: number) {
+    // Clamp phi away from the poles so cross(forward, up) doesn't degenerate.
+    const safePhi = Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, phi))
+    cameraF32[0] = theta
+    cameraF32[1] = safePhi
+    cameraF32[2] = Math.max(20, distance)
+    cameraF32[3] = Math.max(0.1, aspect)
+    device.queue.writeBuffer(cameraBuffer, 0, cameraBytes)
   }
 
   function setViewSlice(axis: ViewAxis3D, depth: number) {
@@ -904,6 +934,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     historyBuffer.destroy()
     probeStagingBuffer.destroy()
     sourcesBuffer.destroy()
+    cameraBuffer.destroy()
     uniformBuffer.destroy()
   }
 
@@ -953,5 +984,6 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     setProbes3D,
     getDims3D,
     setViewSlice,
+    setCameraOrbit,
   }
 }

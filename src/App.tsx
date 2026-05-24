@@ -49,6 +49,11 @@ export default function App() {
   // 3D-only slice controls. Defaults: XY at midplane (matches engine init).
   const [sliceAxis, setSliceAxis] = useState<ViewAxis3D>('xy')
   const [sliceDepth, setSliceDepth] = useState(64)
+  // 3D volume-mode orbit camera. θ around vertical axis, φ elevation, distance
+  // from grid center. Defaults match the engine's initial cameraF32 values.
+  const [cameraTheta, setCameraTheta] = useState(Math.PI / 4)
+  const [cameraPhi, setCameraPhi] = useState(Math.PI / 6)
+  const [cameraDistance, setCameraDistance] = useState(192)
   const [showGrid, setShowGrid] = useState(true)
   const [canUndo, setCanUndo] = useState(false)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null)
@@ -140,6 +145,12 @@ export default function App() {
     setSliceDepth(64)
   }, [])
 
+  // Orbit-camera drag callback from GPUCanvas; (dθ, dφ) in radians.
+  const handleCameraOrbit = useCallback((dTheta: number, dPhi: number) => {
+    setCameraTheta((t) => t + dTheta)
+    setCameraPhi((p) => Math.max(-Math.PI / 2 + 0.05, Math.min(Math.PI / 2 - 0.05, p + dPhi)))
+  }, [])
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
@@ -209,6 +220,8 @@ export default function App() {
         onSliceAxisChange={handleSliceAxisChange}
         sliceDepth={sliceDepth}
         onSliceDepthChange={setSliceDepth}
+        cameraDistance={cameraDistance}
+        onCameraDistanceChange={setCameraDistance}
         showGrid={showGrid}
         onShowGridChange={setShowGrid}
         onUndo={handleUndo}
@@ -234,6 +247,10 @@ export default function App() {
           displayGain={displayGain}
           sliceAxis={sliceAxis}
           sliceDepth={sliceDepth}
+          cameraTheta={cameraTheta}
+          cameraPhi={cameraPhi}
+          cameraDistance={cameraDistance}
+          onCameraOrbit={handleCameraOrbit}
           showGrid={showGrid}
           probes={probes}
           probesPerLine={probesPerLine}

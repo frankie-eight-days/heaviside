@@ -126,6 +126,8 @@ interface ToolbarProps {
   onSliceAxisChange: (a: ViewAxis3D) => void
   sliceDepth: number
   onSliceDepthChange: (d: number) => void
+  cameraDistance: number
+  onCameraDistanceChange: (d: number) => void
   showGrid: boolean
   onShowGridChange: (v: boolean) => void
   onUndo: () => void
@@ -167,6 +169,8 @@ export default function Toolbar({
   onSliceAxisChange,
   sliceDepth,
   onSliceDepthChange,
+  cameraDistance,
+  onCameraDistanceChange,
   showGrid,
   onShowGridChange,
   onUndo,
@@ -432,6 +436,16 @@ export default function Toolbar({
         >
           Magnitude
         </button>
+        {polarization === '3D' && (
+          <button
+            type="button"
+            className={'seg-btn' + (viewMode === 'volume' ? ' seg-btn--active' : '')}
+            onClick={() => onViewModeChange('volume')}
+            title="Ray-march the |E| envelope through the whole volume from an orbit camera. Drag in the canvas to rotate."
+          >
+            Volume
+          </button>
+        )}
       </div>
 
       {viewMode === 'ez' && (
@@ -461,7 +475,25 @@ export default function Toolbar({
         λ grid
       </button>
 
-      {polarization === '3D' && (
+      {polarization === '3D' && viewMode === 'volume' && (
+        <label
+          className="param-slider"
+          title="Camera distance from the grid center. Lower = closer (more detail). Higher = farther (whole grid in view)."
+        >
+          camera
+          <input
+            type="range"
+            min={64}
+            max={400}
+            step={4}
+            value={cameraDistance}
+            onChange={(e) => onCameraDistanceChange(Number(e.target.value))}
+          />
+          <span className="param-value">{cameraDistance}</span>
+        </label>
+      )}
+
+      {polarization === '3D' && viewMode !== 'volume' && (
         <>
           <div
             className="segmented"

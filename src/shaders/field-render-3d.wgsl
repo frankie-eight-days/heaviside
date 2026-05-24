@@ -1,8 +1,9 @@
-// 3D field renderer — fullscreen triangle samples one slice of the 3D
-// volume. view_axis selects orientation, view_depth selects depth along
-// that axis. view_mode = 0 → signed Ez (red/blue with sqrt(|v|) nonlinearity
-// for far-field visibility), 1 → |E| envelope (heat ramp). Draws source +
-// probe markers when they live on the active slice plane.
+// 3D field renderer — handles all three view modes.
+//   view_mode = 0 (Ez):        slice render of signed Ez (red/blue).
+//   view_mode = 1 (magnitude): slice render of |E| envelope (heat ramp).
+//   view_mode = 2 (volume):    ray-march the env buffer from an orbit camera.
+//
+// Slice + volume share the bind group; volume uses the extra camera uniform.
 
 struct Uniforms {
   size: vec4<u32>,
@@ -29,11 +30,19 @@ struct Source3D {
   _pad2: u32,
 };
 
+struct Camera {
+  theta: f32,
+  phi: f32,
+  distance: f32,
+  aspect: f32,
+};
+
 const VIEW_AXIS_XY: u32 = 0u;
 const VIEW_AXIS_XZ: u32 = 1u;
 const VIEW_AXIS_YZ: u32 = 2u;
 const VIEW_EZ: u32 = 0u;
 const VIEW_MAG: u32 = 1u;
+const VIEW_VOLUME: u32 = 2u;
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var<storage, read> ez: array<f32>;
@@ -41,6 +50,7 @@ const VIEW_MAG: u32 = 1u;
 @group(0) @binding(3) var<storage, read> material: array<vec2<f32>>;
 @group(0) @binding(4) var<storage, read> sources: array<Source3D>;
 @group(0) @binding(5) var<storage, read> probes: array<vec4<u32>>;
+@group(0) @binding(6) var<uniform> cam: Camera;
 
 struct VsOut {
   @builtin(position) pos: vec4<f32>,
@@ -57,8 +67,13 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
   return out;
 }
 
-// Display gain from uniform — slider-controlled. MAG_GAIN stays fixed.
 const MAG_GAIN: f32 = 1.6;
+
+// Volume ray-march constants.
+const VOL_FOV: f32 = 0.6;        // ~34° vertical FOV
+const VOL_MAX_STEPS: u32 = 256u;
+const VOL_STEP: f32 = 1.0;       // one cell per step
+const VOL_DENSITY: f32 = 0.06;   // alpha contribution per step at max brightness
 
 fn heat_color(v: f32) -> vec3<f32> {
   let t = clamp(v, 0.0, 1.0);
@@ -70,14 +85,12 @@ fn heat_color(v: f32) -> vec3<f32> {
 }
 
 fn material_bg(er: f32, s: f32) -> vec3<f32> {
-  if (s < 0.0) { return vec3<f32>(0.75, 0.75, 0.78); }  // PEC sentinel
+  if (s < 0.0) { return vec3<f32>(0.75, 0.75, 0.78); }
   let lossy_tint = vec3<f32>(0.22, 0.10, 0.06) * clamp(sqrt(s) * 1.2, 0.0, 1.6);
   let diel_tint  = vec3<f32>(0.04, 0.16, 0.24) * clamp((er - 1.0) / 3.0, 0.0, 2.0);
   return lossy_tint + diel_tint;
 }
 
-// Probe palette — kept in sync with PROBE_COLORS in MeasurementPanel.tsx so
-// the canvas marker matches the plot trace.
 fn probe_color(index: u32) -> vec3<f32> {
   switch (index % 8u) {
     case 0u: { return vec3<f32>(0.40, 0.76, 1.00); }
@@ -91,22 +104,120 @@ fn probe_color(index: u32) -> vec3<f32> {
   }
 }
 
-// Project (vx, vy, vz) volume position into the active slice plane.
-// Returns the (a, b, depth_axis_value) tuple — the source/probe is rendered
-// only if depth_axis_value == view_depth.
 fn project_to_slice(vx: u32, vy: u32, vz: u32) -> vec3<u32> {
   if (u.view_axis == VIEW_AXIS_XY) { return vec3<u32>(vx, vy, vz); }
   if (u.view_axis == VIEW_AXIS_XZ) { return vec3<u32>(vx, vz, vy); }
   return vec3<u32>(vy, vz, vx);
 }
 
+fn cell_index(i: u32, j: u32, k: u32) -> u32 {
+  return i + j * u.size.x + k * u.size.x * u.size.y;
+}
+
+fn sample_env(pos: vec3<f32>) -> f32 {
+  let i = u32(clamp(pos.x, 0.0, f32(u.size.x - 1u)));
+  let j = u32(clamp(pos.y, 0.0, f32(u.size.y - 1u)));
+  let k = u32(clamp(pos.z, 0.0, f32(u.size.z - 1u)));
+  return env[cell_index(i, j, k)];
+}
+
+fn sample_material(pos: vec3<f32>) -> vec2<f32> {
+  let i = u32(clamp(pos.x, 0.0, f32(u.size.x - 1u)));
+  let j = u32(clamp(pos.y, 0.0, f32(u.size.y - 1u)));
+  let k = u32(clamp(pos.z, 0.0, f32(u.size.z - 1u)));
+  return material[cell_index(i, j, k)];
+}
+
+// Ray–axis-aligned-box intersection. box_min=0, box_max=(W,H,D).
+// Returns (t_enter, t_exit). t_enter > t_exit means no hit.
+fn ray_box(origin: vec3<f32>, dir: vec3<f32>) -> vec2<f32> {
+  let box_min = vec3<f32>(0.0);
+  let box_max = vec3<f32>(f32(u.size.x), f32(u.size.y), f32(u.size.z));
+  let inv_dir = 1.0 / dir;
+  let t1 = (box_min - origin) * inv_dir;
+  let t2 = (box_max - origin) * inv_dir;
+  let tmin = min(t1, t2);
+  let tmax = max(t1, t2);
+  let t_enter = max(max(tmin.x, tmin.y), tmin.z);
+  let t_exit = min(min(tmax.x, tmax.y), tmax.z);
+  return vec2<f32>(t_enter, t_exit);
+}
+
+fn render_volume(uv: vec2<f32>) -> vec4<f32> {
+  let W = f32(u.size.x);
+  let H = f32(u.size.y);
+  let D = f32(u.size.z);
+  let target = vec3<f32>(W * 0.5, H * 0.5, D * 0.5);
+
+  let cos_phi = cos(cam.phi);
+  let sin_phi = sin(cam.phi);
+  let cam_pos = target + cam.distance * vec3<f32>(
+    cos_phi * cos(cam.theta),
+    sin_phi,
+    cos_phi * sin(cam.theta),
+  );
+
+  let forward = normalize(target - cam_pos);
+  let world_up = vec3<f32>(0.0, 1.0, 0.0);
+  let right = normalize(cross(forward, world_up));
+  let cam_up = cross(right, forward);
+
+  let ndc = uv * 2.0 - 1.0;
+  let tan_fov = tan(VOL_FOV * 0.5);
+  let ray_dir = normalize(
+    forward
+    + right * (ndc.x * tan_fov * cam.aspect)
+    - cam_up * (ndc.y * tan_fov)
+  );
+
+  let t_range = ray_box(cam_pos, ray_dir);
+  let bg = vec3<f32>(0.0, 0.0, 0.05);
+  if (t_range.x >= t_range.y || t_range.y < 0.0) {
+    return vec4<f32>(bg, 1.0);
+  }
+
+  var t = max(t_range.x, 0.0) + 0.5;
+  let t_exit = t_range.y;
+  var accum = vec3<f32>(0.0);
+  var alpha = 0.0;
+  let scale = u.display_gain * 0.5;
+
+  for (var n = 0u; n < VOL_MAX_STEPS; n = n + 1u) {
+    if (t > t_exit || alpha > 0.99) { break; }
+    let pos = cam_pos + t * ray_dir;
+    let mat = sample_material(pos);
+    var sample_color: vec3<f32>;
+    var sample_alpha: f32;
+    if (mat.y < 0.0) {
+      // PEC is fully opaque — terminates the ray and shows the conductor's
+      // silhouette.
+      sample_color = vec3<f32>(0.75, 0.75, 0.78);
+      sample_alpha = 1.0;
+    } else {
+      let env_v = sample_env(pos);
+      let v = clamp(sqrt(env_v) * scale, 0.0, 1.0);
+      sample_color = heat_color(v);
+      sample_alpha = v * VOL_DENSITY;
+    }
+    accum = accum + (1.0 - alpha) * sample_color * sample_alpha;
+    alpha = alpha + (1.0 - alpha) * sample_alpha;
+    t = t + VOL_STEP;
+  }
+
+  let final_color = accum + (1.0 - alpha) * bg;
+  return vec4<f32>(final_color, 1.0);
+}
+
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4<f32> {
+  if (u.view_mode == VIEW_VOLUME) {
+    return render_volume(in.uv);
+  }
+
   let W = u.size.x;
   let H = u.size.y;
   let D = u.size.z;
 
-  // Compute fragment's (a, b) in the slice plane and volume (i, j, k).
   var sa: u32; var sb: u32;
   var i: u32; var j: u32; var k: u32;
   if (u.view_axis == VIEW_AXIS_XY) {
@@ -117,13 +228,13 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     sa = clamp(u32(in.uv.x * f32(W)), 0u, W - 1u);
     sb = clamp(u32(in.uv.y * f32(D)), 0u, D - 1u);
     i = sa; j = clamp(u.view_depth, 0u, H - 1u); k = sb;
-  } else { // VIEW_AXIS_YZ
+  } else {
     sa = clamp(u32(in.uv.x * f32(H)), 0u, H - 1u);
     sb = clamp(u32(in.uv.y * f32(D)), 0u, D - 1u);
     i = clamp(u.view_depth, 0u, W - 1u); j = sa; k = sb;
   }
 
-  let cell = i + j * W + k * W * H;
+  let cell = cell_index(i, j, k);
   let mat = material[cell];
   let bg = material_bg(mat.x, mat.y);
 
@@ -142,7 +253,6 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     result = clamp(bg + field, vec3<f32>(0.0), vec3<f32>(1.0));
   }
 
-  // Probe markers — colored ring if probe is on the active slice plane.
   let pn = u.probe_count;
   for (var p = 0u; p < pn; p = p + 1u) {
     let pos = probes[p];
@@ -156,7 +266,6 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     }
   }
 
-  // Source markers — cyan ring (chebyshev 3–4 cells from source center).
   let sn = u.source_count;
   for (var s = 0u; s < sn; s = s + 1u) {
     let p = sources[s].pos;

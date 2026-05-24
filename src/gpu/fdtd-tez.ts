@@ -635,6 +635,7 @@ export function createFDTD_TEz(gpu: GPUContext): FDTDEngine {
   }
 
   function setViewMode(mode: ViewMode) {
+    // 2D has no 'volume' — fall back to the signed view.
     uniformU32[5] = mode === 'magnitude' ? 1 : 0
     writeUniforms()
   }

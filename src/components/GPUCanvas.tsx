@@ -48,6 +48,10 @@ interface GPUCanvasProps {
   displayGain: number
   sliceAxis: ViewAxis3D
   sliceDepth: number
+  cameraTheta: number
+  cameraPhi: number
+  cameraDistance: number
+  onCameraOrbit: (dTheta: number, dPhi: number) => void
   showGrid: boolean
   probes: ProbeSpec[]
   probesPerLine: number
@@ -71,6 +75,10 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     displayGain,
     sliceAxis,
     sliceDepth,
+    cameraTheta,
+    cameraPhi,
+    cameraDistance,
+    onCameraOrbit,
     showGrid,
     probes,
     probesPerLine,
@@ -103,6 +111,14 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   const dragStartRef = useRef<[number, number] | null>(null)
   const dragEndRef = useRef<[number, number] | null>(null)
   const dragToolRef = useRef<Tool | null>(null)
+  // Volume-mode orbit drag state — last raw pointer position. We feed deltas
+  // back to App via onCameraOrbit so the camera state stays in App and the
+  // useEffect[cameraTheta/Phi] path writes the engine uniform.
+  const orbitDragRef = useRef<{ x: number; y: number } | null>(null)
+  const viewModeRef2 = useRef(viewMode)
+  useEffect(() => {
+    viewModeRef2.current = viewMode
+  }, [viewMode])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -151,6 +167,13 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     if (!engine || engine.polarization !== '3D') return
     ;(engine as FDTDEngine3D).setViewSlice(sliceAxis, sliceDepth)
   }, [sliceAxis, sliceDepth])
+  useEffect(() => {
+    const engine = engineRef.current
+    if (!engine || engine.polarization !== '3D') return
+    const [w, h] = lastSizeRef.current
+    const aspect = h > 0 ? w / h : 1
+    ;(engine as FDTDEngine3D).setCameraOrbit(cameraTheta, cameraPhi, cameraDistance, aspect)
+  }, [cameraTheta, cameraPhi, cameraDistance])
   useEffect(() => {
     probesRef.current = probes
     engineRef.current?.setProbes(probes)
@@ -511,6 +534,12 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const engine = engineRef.current
     if (!engine) return
+    // In volume mode, any drag rotates the camera regardless of tool.
+    if (viewModeRef2.current === 'volume') {
+      orbitDragRef.current = { x: e.clientX, y: e.clientY }
+      e.currentTarget.setPointerCapture(e.pointerId)
+      return
+    }
     const g = eventToGrid(e)
     if (!g) return
     if (toolRef.current === 'source') {
@@ -542,6 +571,17 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   }
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (orbitDragRef.current) {
+      const last = orbitDragRef.current
+      const dx = e.clientX - last.x
+      const dy = e.clientY - last.y
+      orbitDragRef.current = { x: e.clientX, y: e.clientY }
+      const canvas = canvasRef.current
+      const w = canvas?.clientWidth ?? 800
+      // Drag the full canvas width to do a full rotation.
+      onCameraOrbit((dx * 2 * Math.PI) / w, (dy * Math.PI) / w)
+      return
+    }
     if (dragToolRef.current === 'probe') {
       const g = eventToGrid(e)
       if (g) {
@@ -558,6 +598,13 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   }
 
   const onPointerEnd = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (orbitDragRef.current) {
+      orbitDragRef.current = null
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+      return
+    }
     if (dragToolRef.current === 'probe') {
       const start = dragStartRef.current
       const end = dragEndRef.current
