@@ -1,8 +1,10 @@
+import type { Polarization } from '../gpu/fdtd'
 import type { Scene, SceneCategory } from '../scenes'
 
 interface ExamplesSidebarProps {
   scenes: Scene[]
   activeSceneId: string | null
+  polarization: Polarization
   onSelect: (scene: Scene) => void
 }
 
@@ -17,13 +19,20 @@ const CATEGORY_ORDER: SceneCategory[] = ['antennas', 'pcb', '3d']
 export default function ExamplesSidebar({
   scenes,
   activeSceneId,
+  polarization,
   onSelect,
 }: ExamplesSidebarProps) {
+  // Show only scenes that match the active polarization. Scenes that omit
+  // `polarization` still show in every mode (rare; reserved for future
+  // engine-agnostic demos).
+  const visible = scenes.filter(
+    (s) => s.polarization === undefined || s.polarization === polarization,
+  )
   return (
     <aside className="examples-sidebar">
       <div className="examples-header">Examples</div>
       {CATEGORY_ORDER.map((category) => {
-        const inCategory = scenes.filter((s) => s.category === category)
+        const inCategory = visible.filter((s) => s.category === category)
         if (inCategory.length === 0) return null
         return (
           <section key={category} className="examples-section">

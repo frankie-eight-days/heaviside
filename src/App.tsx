@@ -154,6 +154,7 @@ export default function App() {
       <ExamplesSidebar
         scenes={ALL_SCENES}
         activeSceneId={activeSceneId}
+        polarization={polarization}
         onSelect={handleSceneSelect}
       />
       <Toolbar
