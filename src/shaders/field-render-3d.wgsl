@@ -4,7 +4,7 @@
 // add |E| magnitude, material tint, source/probe markers.
 
 struct Uniforms {
-  size: vec3<u32>,
+  size: vec4<u32>,
   source_count: u32,
   pml_thickness: u32,
   sc: f32,

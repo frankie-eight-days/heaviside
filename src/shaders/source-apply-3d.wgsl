@@ -3,7 +3,7 @@
 // pol encoding: 1=x, 2=y, 3=z (and 0 → z as the default for 3D scenes).
 
 struct Uniforms {
-  size: vec3<u32>,
+  size: vec4<u32>,
   source_count: u32,
   pml_thickness: u32,
   sc: f32,
@@ -19,7 +19,7 @@ struct Uniforms {
 };
 
 struct Source3D {
-  pos: vec3<u32>,
+  pos: vec4<u32>,
   pol: u32,
   value: f32,
   _pad0: u32,
