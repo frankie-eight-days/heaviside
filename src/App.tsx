@@ -120,6 +120,8 @@ export default function App() {
       setSourcePeriod(cfg.sourcePeriod)
       setSourceMode(cfg.sourceMode)
       setViewMode(cfg.viewMode)
+      if (cfg.sliceAxis) setSliceAxis(cfg.sliceAxis)
+      if (cfg.sliceDepth !== undefined) setSliceDepth(cfg.sliceDepth)
       setProbes(cfg.probes ?? [])
       if (cfg.polarization) setPolarization(cfg.polarization)
     }

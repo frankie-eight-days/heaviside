@@ -10,6 +10,7 @@ import { microstrip } from './pcb/microstrip'
 import { stripline } from './pcb/stripline'
 import { differentialPair } from './pcb/differential-pair'
 import { pointSource3D } from './3d/point-source-3d'
+import { verticalDipole3D } from './3d/vertical-dipole-3d'
 
 export type { Scene, SceneCategory } from './types'
 
@@ -25,4 +26,5 @@ export const ALL_SCENES: Scene[] = [
   stripline,
   differentialPair,
   pointSource3D,
+  verticalDipole3D,
 ]

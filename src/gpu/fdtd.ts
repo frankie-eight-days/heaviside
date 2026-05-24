@@ -164,6 +164,17 @@ export interface FDTDEngine3D extends FDTDEngine {
   getDims3D: () => { width: number; height: number; depth: number }
   setViewSlice: (axis: ViewAxis3D, depth: number) => void
   setCameraOrbit: (theta: number, phi: number, distance: number, aspect: number) => void
+  // Paint an axis-aligned 3D box of material (PEC arms, ground planes,
+  // dielectric blocks). Bounds are clamped inside the CPML region.
+  paintBox3D: (
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+    brush: BrushSpec,
+  ) => void
 }
 
 function fieldDimsFromCanvas(w: number, h: number): [number, number] {

@@ -885,6 +885,37 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     uploadMaterial()
   }
 
+  // Paint an axis-aligned 3D box. Used by scenes to lay out antenna arms,
+  // ground planes, etc. Bounds clamped inside the CPML region.
+  function paintBox3D(
+    x0: number,
+    y0: number,
+    z0: number,
+    x1: number,
+    y1: number,
+    z1: number,
+    brush: BrushSpec,
+  ) {
+    const xMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(x0, x1)))
+    const xMax = Math.min(W - PML_THICKNESS_3D - 1, Math.floor(Math.max(x0, x1)))
+    const yMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(y0, y1)))
+    const yMax = Math.min(H - PML_THICKNESS_3D - 1, Math.floor(Math.max(y0, y1)))
+    const zMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(z0, z1)))
+    const zMax = Math.min(D - PML_THICKNESS_3D - 1, Math.floor(Math.max(z0, z1)))
+    const er = brush.epsilonR
+    const sg = brush.pec ? -1.0 : brush.sigma
+    for (let k = zMin; k <= zMax; k++) {
+      for (let j = yMin; j <= yMax; j++) {
+        for (let i = xMin; i <= xMax; i++) {
+          const cell = cellIndex(i, j, k)
+          epsSigGrid[2 * cell] = er
+          epsSigGrid[2 * cell + 1] = sg
+        }
+      }
+    }
+    uploadMaterial()
+  }
+
   function snapshotMaterials(): MaterialSnapshot {
     return {
       epsSig: new Float32Array(epsSigGrid),
@@ -988,5 +1019,6 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     getDims3D,
     setViewSlice,
     setCameraOrbit,
+    paintBox3D,
   }
 }
