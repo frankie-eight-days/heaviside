@@ -19,6 +19,17 @@ export async function initGPU(canvas: HTMLCanvasElement): Promise<GPUContext> {
 
   const device = await adapter.requestDevice()
 
+  // Surface silent WebGPU validation errors — pipeline creation, bind group
+  // mismatches, and buffer-size violations are otherwise invisible without
+  // explicit error scopes.
+  device.addEventListener('uncapturederror', (event) => {
+    const e = event as unknown as { error: { message?: string } }
+    console.error('[webgpu]', e.error?.message ?? e.error)
+  })
+  device.lost.then((info) => {
+    console.error('[webgpu] device lost:', info.reason, info.message)
+  })
+
   const context = canvas.getContext('webgpu')
   if (!context) {
     throw new Error('Could not obtain WebGPU canvas context.')
