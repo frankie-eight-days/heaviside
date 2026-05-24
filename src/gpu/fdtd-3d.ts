@@ -234,10 +234,11 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   })
   const cameraBytes = new ArrayBuffer(16)
   const cameraF32 = new Float32Array(cameraBytes)
-  // Sensible defaults: looking from upper-right-front, ~1.5× grid size out.
+  // Sensible defaults: looking from upper-right-front, ~2× grid size out so
+  // the whole cube fits comfortably at the default ~34° FOV.
   cameraF32[0] = Math.PI / 4
   cameraF32[1] = Math.PI / 6
-  cameraF32[2] = Math.max(W, H, D) * 1.5
+  cameraF32[2] = Math.max(W, H, D) * 2.0
   cameraF32[3] = 1.0
   device.queue.writeBuffer(cameraBuffer, 0, cameraBytes)
   const probesBytes = new ArrayBuffer(MAX_PROBES * 16)

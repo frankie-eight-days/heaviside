@@ -115,10 +115,13 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   // back to App via onCameraOrbit so the camera state stays in App and the
   // useEffect[cameraTheta/Phi] path writes the engine uniform.
   const orbitDragRef = useRef<{ x: number; y: number } | null>(null)
-  const viewModeRef2 = useRef(viewMode)
-  useEffect(() => {
-    viewModeRef2.current = viewMode
-  }, [viewMode])
+  // Refs for values seedEngineFromProps needs at swap time (avoid stale closures).
+  const displayGainRef = useRef(displayGain)
+  const sliceAxisRef = useRef(sliceAxis)
+  const sliceDepthRef = useRef(sliceDepth)
+  const cameraThetaRef = useRef(cameraTheta)
+  const cameraPhiRef = useRef(cameraPhi)
+  const cameraDistanceRef = useRef(cameraDistance)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -160,14 +163,20 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     engineRef.current?.setViewMode(viewMode)
   }, [viewMode])
   useEffect(() => {
+    displayGainRef.current = displayGain
     engineRef.current?.setDisplayGain(displayGain)
   }, [displayGain])
   useEffect(() => {
+    sliceAxisRef.current = sliceAxis
+    sliceDepthRef.current = sliceDepth
     const engine = engineRef.current
     if (!engine || engine.polarization !== '3D') return
     ;(engine as FDTDEngine3D).setViewSlice(sliceAxis, sliceDepth)
   }, [sliceAxis, sliceDepth])
   useEffect(() => {
+    cameraThetaRef.current = cameraTheta
+    cameraPhiRef.current = cameraPhi
+    cameraDistanceRef.current = cameraDistance
     const engine = engineRef.current
     if (!engine || engine.polarization !== '3D') return
     const [w, h] = lastSizeRef.current
@@ -187,7 +196,20 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     engine.setSourceWaveform(sourceWaveformRef.current)
     engine.setModulation(modulationRef.current)
     engine.setViewMode(viewModeRef.current)
+    engine.setDisplayGain(displayGainRef.current)
     engine.setProbes(probesRef.current)
+    if (engine.polarization === '3D') {
+      const e3 = engine as FDTDEngine3D
+      e3.setViewSlice(sliceAxisRef.current, sliceDepthRef.current)
+      const [w, h] = lastSizeRef.current
+      const aspect = h > 0 ? w / h : 1
+      e3.setCameraOrbit(
+        cameraThetaRef.current,
+        cameraPhiRef.current,
+        cameraDistanceRef.current,
+        aspect,
+      )
+    }
   }
 
   // Polarization swap. Snapshots materials, destroys the old engine, creates
@@ -535,7 +557,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     const engine = engineRef.current
     if (!engine) return
     // In volume mode, any drag rotates the camera regardless of tool.
-    if (viewModeRef2.current === 'volume') {
+    if (viewModeRef.current === 'volume') {
       orbitDragRef.current = { x: e.clientX, y: e.clientY }
       e.currentTarget.setPointerCapture(e.pointerId)
       return

@@ -53,7 +53,7 @@ export default function App() {
   // from grid center. Defaults match the engine's initial cameraF32 values.
   const [cameraTheta, setCameraTheta] = useState(Math.PI / 4)
   const [cameraPhi, setCameraPhi] = useState(Math.PI / 6)
-  const [cameraDistance, setCameraDistance] = useState(192)
+  const [cameraDistance, setCameraDistance] = useState(256)
   const [showGrid, setShowGrid] = useState(true)
   const [canUndo, setCanUndo] = useState(false)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null)

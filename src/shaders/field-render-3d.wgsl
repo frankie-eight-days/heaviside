@@ -73,7 +73,7 @@ const MAG_GAIN: f32 = 1.6;
 const VOL_FOV: f32 = 0.6;        // ~34° vertical FOV
 const VOL_MAX_STEPS: u32 = 256u;
 const VOL_STEP: f32 = 1.0;       // one cell per step
-const VOL_DENSITY: f32 = 0.06;   // alpha contribution per step at max brightness
+const VOL_DENSITY: f32 = 0.12;   // alpha contribution per step at max brightness
 
 fn heat_color(v: f32) -> vec3<f32> {
   let t = clamp(v, 0.0, 1.0);
