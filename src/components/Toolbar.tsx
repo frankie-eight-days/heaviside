@@ -120,6 +120,8 @@ interface ToolbarProps {
   onProbesPerLineChange: (n: number) => void
   viewMode: ViewMode
   onViewModeChange: (m: ViewMode) => void
+  displayGain: number
+  onDisplayGainChange: (g: number) => void
   sliceAxis: ViewAxis3D
   onSliceAxisChange: (a: ViewAxis3D) => void
   sliceDepth: number
@@ -159,6 +161,8 @@ export default function Toolbar({
   onProbesPerLineChange,
   viewMode,
   onViewModeChange,
+  displayGain,
+  onDisplayGainChange,
   sliceAxis,
   onSliceAxisChange,
   sliceDepth,
@@ -429,6 +433,24 @@ export default function Toolbar({
           Magnitude
         </button>
       </div>
+
+      {viewMode === 'ez' && (
+        <label
+          className="param-slider"
+          title="Brightness gain on the signed-field view. Higher = far-field rings more visible; lower = mostly near-source amplitude."
+        >
+          gain
+          <input
+            type="range"
+            min={1}
+            max={20}
+            step={0.5}
+            value={displayGain}
+            onChange={(e) => onDisplayGainChange(Number(e.target.value))}
+          />
+          <span className="param-value">{displayGain.toFixed(1)}</span>
+        </label>
+      )}
 
       <button
         type="button"

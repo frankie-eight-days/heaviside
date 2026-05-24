@@ -45,6 +45,7 @@ interface GPUCanvasProps {
   sourceWaveform: SourceWaveform
   modulation: ModulationParams
   viewMode: ViewMode
+  displayGain: number
   sliceAxis: ViewAxis3D
   sliceDepth: number
   showGrid: boolean
@@ -67,6 +68,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     sourceWaveform,
     modulation,
     viewMode,
+    displayGain,
     sliceAxis,
     sliceDepth,
     showGrid,
@@ -141,6 +143,9 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     viewModeRef.current = viewMode
     engineRef.current?.setViewMode(viewMode)
   }, [viewMode])
+  useEffect(() => {
+    engineRef.current?.setDisplayGain(displayGain)
+  }, [displayGain])
   useEffect(() => {
     const engine = engineRef.current
     if (!engine || engine.polarization !== '3D') return

@@ -11,7 +11,7 @@ struct Uniforms {
   probe_count: u32,
   history_head: u32,
   history_len: u32,
-  _pad0: u32,
+  display_gain: f32,
   _pad1: u32,
   _pad2: u32,
 };
@@ -50,9 +50,7 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
   return out;
 }
 
-// Display gains match TMz (sqrt(|v|) × DISPLAY_GAIN). Bumped 3 → 6 with the
-// 2D-Ez change so the signed views read consistently across engines.
-const DISPLAY_GAIN: f32 = 6.0;
+// Display gain comes from the uniform (user-tunable via toolbar slider).
 const MAG_GAIN: f32 = 1.6;
 
 fn material_bg(er: f32, s: f32, pec: bool) -> vec3<f32> {
@@ -123,7 +121,7 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     // even more here since Hz amplitude is small in our normalized units.
     let v = hzx[k] + hzy[k];
     let sgn = sign(v);
-    let n = clamp(sgn * sqrt(abs(v)) * DISPLAY_GAIN, -1.0, 1.0);
+    let n = clamp(sgn * sqrt(abs(v)) * u.display_gain, -1.0, 1.0);
     let pos = max(n, 0.0);
     let neg = max(-n, 0.0);
     let field = vec3<f32>(pos, 0.06 * (pos + neg), neg);

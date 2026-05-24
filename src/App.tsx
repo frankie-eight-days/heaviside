@@ -42,6 +42,10 @@ export default function App() {
     squareEdge: 20,
   })
   const [viewMode, setViewMode] = useState<ViewMode>('ez')
+  // Brightness for the signed-field views (Ez/Hz). Magnitude has its own
+  // fixed gain that doesn't need tuning. Default 6 matches what felt right
+  // for the centered-source smoke test.
+  const [displayGain, setDisplayGain] = useState(6)
   // 3D-only slice controls. Defaults: XY at midplane (matches engine init).
   const [sliceAxis, setSliceAxis] = useState<ViewAxis3D>('xy')
   const [sliceDepth, setSliceDepth] = useState(64)
@@ -199,6 +203,8 @@ export default function App() {
         onProbesPerLineChange={setProbesPerLine}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
+        displayGain={displayGain}
+        onDisplayGainChange={setDisplayGain}
         sliceAxis={sliceAxis}
         onSliceAxisChange={handleSliceAxisChange}
         sliceDepth={sliceDepth}
@@ -225,6 +231,7 @@ export default function App() {
           sourceWaveform={sourceWaveform}
           modulation={modulation}
           viewMode={viewMode}
+          displayGain={displayGain}
           sliceAxis={sliceAxis}
           sliceDepth={sliceDepth}
           showGrid={showGrid}

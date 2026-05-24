@@ -145,6 +145,7 @@ export interface FDTDEngine {
   setModulation: (params: Partial<ModulationParams>) => void
   firePulse: () => void
   setViewMode: (mode: ViewMode) => void
+  setDisplayGain: (g: number) => void
   setProbes: (probes: ProbeSpec[]) => void
   getProbeHistory: () => ProbeHistorySnapshot
   snapshotMaterials: () => MaterialSnapshot
@@ -227,6 +228,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   uniformF32[4] = SC
   uniformU32[5] = 0 // view_mode = Ez by default
   uniformU32[8] = PROBE_HISTORY_LEN
+  uniformF32[9] = 6.0 // display_gain — overrides via setDisplayGain
 
   function writeUniforms() {
     device.queue.writeBuffer(uniformBuffer, 0, uniformBytes)
@@ -765,6 +767,11 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     writeUniforms()
   }
 
+  function setDisplayGain(g: number) {
+    uniformF32[9] = Math.max(0.1, g)
+    writeUniforms()
+  }
+
   function setProbes(specs: ProbeSpec[]) {
     probes = specs.slice(0, MAX_PROBES).map((p) => ({
       x: Math.max(0, Math.min(fieldW - 1, Math.floor(p.x))),
@@ -856,6 +863,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     setModulation,
     firePulse,
     setViewMode,
+    setDisplayGain,
     setProbes,
     getProbeHistory,
     snapshotMaterials,

@@ -143,6 +143,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   uniformU32[10] = 0 // probe_count
   uniformU32[11] = 0 // history_head
   uniformU32[12] = PROBE_HISTORY_LEN
+  uniformF32[13] = 6.0 // display_gain — overrides via setDisplayGain
 
   function writeUniforms() {
     device.queue.writeBuffer(uniformBuffer, 0, uniformBytes)
@@ -737,6 +738,11 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     writeUniforms()
   }
 
+  function setDisplayGain(g: number) {
+    uniformF32[13] = Math.max(0.1, g)
+    writeUniforms()
+  }
+
   function setViewSlice(axis: ViewAxis3D, depth: number) {
     const axisCode = axis === 'xy' ? 0 : axis === 'xz' ? 1 : 2
     uniformU32[7] = axisCode
@@ -935,6 +941,7 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     setModulation,
     firePulse,
     setViewMode,
+    setDisplayGain,
     setProbes,
     getProbeHistory,
     snapshotMaterials,
