@@ -33,9 +33,11 @@ import {
 const SC_3D = 0.99 / Math.sqrt(3)
 const REFERENCE_PERIOD = 80
 
-// 3D is much heavier per step than 2D. Start with 1 substep per frame; the
-// slice render is cheap, the compute passes are the cost.
-const STEPS_PER_FRAME = 1
+// FDTD substeps per frame. 4 matches 2D — without this, the envelope takes
+// 10+ seconds to fill the grid because each rAF tick only advances the
+// wave 0.57 cells. Volume render is the bottleneck per frame, not the
+// compute, so adding substeps is essentially free.
+const STEPS_PER_FRAME = 4
 
 // Default 128³ for M9a/b. ADR 0010 calls for 256³ as the "user-facing"
 // default; we'll surface a resolution control in M9d.

@@ -186,22 +186,27 @@ fn render_volume(uv: vec2<f32>) -> vec4<f32> {
   let scale = u.display_gain * 0.5;
 
   for (var n = 0u; n < VOL_MAX_STEPS; n = n + 1u) {
-    if (t > t_exit || alpha > 0.99) { break; }
+    if (t > t_exit || alpha > 0.95) { break; }
     let pos = cam_pos + t * ray_dir;
     let mat = sample_material(pos);
-    var sample_color: vec3<f32>;
-    var sample_alpha: f32;
     if (mat.y < 0.0) {
-      // PEC is fully opaque — terminates the ray and shows the conductor's
-      // silhouette.
-      sample_color = vec3<f32>(0.75, 0.75, 0.78);
-      sample_alpha = 1.0;
-    } else {
-      let env_v = sample_env(pos);
-      let v = clamp(sqrt(env_v) * scale, 0.0, 1.0);
-      sample_color = heat_color(v);
-      sample_alpha = v * VOL_DENSITY;
+      // PEC is fully opaque — write through whatever has accumulated so far
+      // and break. Conductor shows as solid gray silhouette.
+      accum = accum + (1.0 - alpha) * vec3<f32>(0.75, 0.75, 0.78);
+      alpha = 1.0;
+      break;
     }
+    let env_v = sample_env(pos);
+    // Adaptive step: skip 4× through cells with no detectable field. For a
+    // freshly-started scene where the wave hasn't filled the grid yet, this
+    // is the difference between 5 fps and 30 fps.
+    if (env_v < 0.0005) {
+      t = t + VOL_STEP * 4.0;
+      continue;
+    }
+    let v = clamp(sqrt(env_v) * scale, 0.0, 1.0);
+    let sample_color = heat_color(v);
+    let sample_alpha = v * VOL_DENSITY;
     accum = accum + (1.0 - alpha) * sample_color * sample_alpha;
     alpha = alpha + (1.0 - alpha) * sample_alpha;
     t = t + VOL_STEP;
