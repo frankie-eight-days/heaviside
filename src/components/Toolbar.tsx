@@ -1,27 +1,41 @@
+import type { SourceMode, ViewMode } from '../gpu/fdtd'
+
 export const MAT_VACUUM = 0
 export const MAT_PEC = 1
 export const MAT_MATERIAL = 2
+export const MAT_SOURCE = 3
 
 interface MaterialOption {
   id: number
   label: string
   swatch: string
+  title?: string
 }
-
-const MATERIALS: MaterialOption[] = [
-  { id: MAT_VACUUM, label: 'Eraser', swatch: '#0a0a0f' },
-  { id: MAT_PEC, label: 'PEC', swatch: '#bdbdc2' },
-  { id: MAT_MATERIAL, label: 'Material', swatch: '#2f5a93' },
-]
 
 const TIP_PEC =
   'Perfect Electric Conductor: a flawless mirror for EM waves. Stand-in for metals (copper, aluminum) at RF — no field can exist inside, so waves bounce.'
 
 const TIP_DK =
-  'Dielectric constant (εr). How much the material slows EM waves: speed inside = c / √Dk. Vacuum = 1, FR-4 ≈ 4.4, glass ≈ 6, water ≈ 80. Higher Dk also means a shorter wavelength inside the material — that\'s why high-Dk substrates let you build smaller antennas.'
+  "Dielectric constant (εr). How much the material slows EM waves: speed inside = c / √Dk. Vacuum = 1, FR-4 ≈ 4.4, glass ≈ 6, water ≈ 80. Higher Dk also means a shorter wavelength inside the material — that's why high-Dk substrates let you build smaller antennas."
 
 const TIP_DF =
   'Loss tangent (tan δ). Fraction of wave energy converted to heat per radian of oscillation. Teflon ≈ 0.0002 (basically lossless), FR-4 ≈ 0.02 (fine at MHz, lossy at GHz), foam absorber ≈ 1+ (eats the wave). Df is evaluated at the source frequency.'
+
+const TIP_SOURCE =
+  'Place a source: click anywhere on the canvas to move the source to that cell. The yellow marker shows the current position. Combine with Pulse mode to fire a clean wavefront.'
+
+const TIP_WAVELENGTH =
+  'Wavelength in vacuum, measured in grid cells. Smaller wavelength = higher frequency. With Material painted nearby, the wavelength inside it shrinks by √Dk.'
+
+const TIP_VIEW =
+  'Ez shows the instantaneous field (red = positive, blue = negative). Magnitude shows the time-averaged peak amplitude — radiation patterns and standing waves stay visible.'
+
+const MATERIALS: MaterialOption[] = [
+  { id: MAT_VACUUM, label: 'Eraser', swatch: '#0a0a0f' },
+  { id: MAT_PEC, label: 'PEC', swatch: '#bdbdc2', title: TIP_PEC },
+  { id: MAT_MATERIAL, label: 'Material', swatch: '#2f5a93' },
+  { id: MAT_SOURCE, label: 'Source', swatch: '#ffd633', title: TIP_SOURCE },
+]
 
 export interface MaterialPreset {
   label: string
@@ -36,6 +50,22 @@ export const MATERIAL_PRESETS: MaterialPreset[] = [
   { label: 'Foam absorber', dk: 1.5, df: 1.0 },
 ]
 
+const SOURCE_MODES: { id: SourceMode; label: string }[] = [
+  { id: 'off', label: 'Off' },
+  { id: 'cw', label: 'CW' },
+  { id: 'pulse', label: 'Pulse' },
+]
+
+// Convert between user-facing wavelength (in cells) and the engine's source
+// period (in timesteps). λ_cells = period · Sc, with Sc = 1/√2.
+const SC = 1 / Math.SQRT2
+export function periodToWavelength(period: number): number {
+  return period * SC
+}
+export function wavelengthToPeriod(wavelength: number): number {
+  return wavelength / SC
+}
+
 interface ToolbarProps {
   material: number
   onMaterialChange: (id: number) => void
@@ -46,6 +76,13 @@ interface ToolbarProps {
   df: number
   onDfChange: (v: number) => void
   onPreset: (p: MaterialPreset) => void
+  sourcePeriod: number
+  onSourcePeriodChange: (v: number) => void
+  sourceMode: SourceMode
+  onSourceModeChange: (m: SourceMode) => void
+  onFirePulse: () => void
+  viewMode: ViewMode
+  onViewModeChange: (m: ViewMode) => void
   onUndo: () => void
   onResetFields: () => void
   onResetMaterials: () => void
@@ -62,11 +99,20 @@ export default function Toolbar({
   df,
   onDfChange,
   onPreset,
+  sourcePeriod,
+  onSourcePeriodChange,
+  sourceMode,
+  onSourceModeChange,
+  onFirePulse,
+  viewMode,
+  onViewModeChange,
   onUndo,
   onResetFields,
   onResetMaterials,
   canUndo,
 }: ToolbarProps) {
+  const wavelength = periodToWavelength(sourcePeriod)
+
   return (
     <div className="toolbar">
       <div className="material-group">
@@ -78,7 +124,7 @@ export default function Toolbar({
             }
             onClick={() => onMaterialChange(m.id)}
             type="button"
-            title={m.id === MAT_PEC ? TIP_PEC : undefined}
+            title={m.title}
           >
             <span className="material-swatch" style={{ background: m.swatch }} />
             {m.label}
@@ -128,6 +174,48 @@ export default function Toolbar({
         </>
       )}
 
+      {material === MAT_SOURCE && (
+        <>
+          <label className="param-slider" title={TIP_WAVELENGTH}>
+            λ (cells) <span className="info-glyph">ⓘ</span>
+            <input
+              type="range"
+              min={10}
+              max={120}
+              step={1}
+              value={Math.round(wavelength)}
+              onChange={(e) =>
+                onSourcePeriodChange(wavelengthToPeriod(Number(e.target.value)))
+              }
+            />
+            <span className="param-value">{Math.round(wavelength)}</span>
+          </label>
+          <div className="segmented">
+            {SOURCE_MODES.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                className={
+                  'seg-btn' + (sourceMode === m.id ? ' seg-btn--active' : '')
+                }
+                onClick={() => onSourceModeChange(m.id)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          {sourceMode === 'pulse' && (
+            <button
+              type="button"
+              className="action-btn action-btn--primary"
+              onClick={onFirePulse}
+            >
+              Fire
+            </button>
+          )}
+        </>
+      )}
+
       <label className="param-slider">
         Brush
         <input
@@ -140,6 +228,23 @@ export default function Toolbar({
         />
         <span className="param-value">{brushRadius}</span>
       </label>
+
+      <div className="segmented" title={TIP_VIEW}>
+        <button
+          type="button"
+          className={'seg-btn' + (viewMode === 'ez' ? ' seg-btn--active' : '')}
+          onClick={() => onViewModeChange('ez')}
+        >
+          Ez
+        </button>
+        <button
+          type="button"
+          className={'seg-btn' + (viewMode === 'magnitude' ? ' seg-btn--active' : '')}
+          onClick={() => onViewModeChange('magnitude')}
+        >
+          Magnitude
+        </button>
+      </div>
 
       <div className="action-group">
         <button

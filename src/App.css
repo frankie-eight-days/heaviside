@@ -154,6 +154,49 @@
   cursor: not-allowed;
 }
 
+.action-btn--primary {
+  background: #2a3a55;
+  border-color: #4a6a90;
+  color: #fff;
+}
+
+.action-btn--primary:hover {
+  background: #344666;
+  border-color: #5a7aa0;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid #2a2a35;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  padding: 6px 12px;
+  background: #1a1a22;
+  border: none;
+  border-right: 1px solid #2a2a35;
+  color: #ccc;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.seg-btn:last-child {
+  border-right: none;
+}
+
+.seg-btn:hover {
+  background: #1f1f29;
+}
+
+.seg-btn--active {
+  background: #2a3a55;
+  color: #fff;
+}
+
 .canvas-wrap {
   flex: 1;
   display: flex;

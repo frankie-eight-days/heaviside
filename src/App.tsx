@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import GPUCanvas, { type GPUCanvasHandle } from './components/GPUCanvas'
+import GPUCanvas, { type GPUCanvasHandle, type Tool } from './components/GPUCanvas'
 import Toolbar, {
   MAT_PEC,
   MAT_MATERIAL,
+  MAT_SOURCE,
   type MaterialPreset,
 } from './components/Toolbar'
-import { dfToSigma, type BrushSpec } from './gpu/fdtd'
+import { dfToSigma, type BrushSpec, type SourceMode, type ViewMode } from './gpu/fdtd'
 import './App.css'
 
 export default function App() {
@@ -13,8 +14,13 @@ export default function App() {
   const [brushRadius, setBrushRadius] = useState(5)
   const [dk, setDk] = useState(4.4)
   const [df, setDf] = useState(0.02)
+  const [sourcePeriod, setSourcePeriod] = useState(80)
+  const [sourceMode, setSourceMode] = useState<SourceMode>('cw')
+  const [viewMode, setViewMode] = useState<ViewMode>('ez')
   const [canUndo, setCanUndo] = useState(false)
   const canvasHandle = useRef<GPUCanvasHandle | null>(null)
+
+  const tool: Tool = material === MAT_SOURCE ? 'source' : 'paint'
 
   const brush = useMemo<BrushSpec>(() => {
     if (material === MAT_PEC) return { epsilonR: 1, sigma: 0, pec: true }
@@ -42,24 +48,36 @@ export default function App() {
     canvasHandle.current?.resetMaterials()
   }, [])
 
-  // Cmd/Ctrl+Z for undo at the window level.
+  const handleFirePulse = useCallback(() => {
+    canvasHandle.current?.firePulse()
+  }, [])
+
+  // Cmd/Ctrl+Z for undo, space bar to fire a pulse when in Pulse mode.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'z') {
         e.preventDefault()
         handleUndo()
+      } else if (
+        e.code === 'Space' &&
+        sourceMode === 'pulse' &&
+        !(e.target instanceof HTMLInputElement)
+      ) {
+        e.preventDefault()
+        handleFirePulse()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [handleUndo])
+  }, [handleUndo, handleFirePulse, sourceMode])
 
   return (
     <div className="app">
       <header className="header">
         <h1>EM Playground</h1>
         <span className="subtitle">
-          Paint PEC or dielectric/lossy materials (Dk, Df) and watch waves interact.
+          Paint materials, place a source, watch waves interact. Magnitude view
+          shows radiation patterns.
         </span>
       </header>
       <Toolbar
@@ -72,6 +90,13 @@ export default function App() {
         df={df}
         onDfChange={setDf}
         onPreset={handlePreset}
+        sourcePeriod={sourcePeriod}
+        onSourcePeriodChange={setSourcePeriod}
+        sourceMode={sourceMode}
+        onSourceModeChange={setSourceMode}
+        onFirePulse={handleFirePulse}
+        viewMode={viewMode}
+        onViewModeChange={setViewMode}
         onUndo={handleUndo}
         onResetFields={handleResetFields}
         onResetMaterials={handleResetMaterials}
@@ -80,8 +105,12 @@ export default function App() {
       <main className="canvas-wrap">
         <GPUCanvas
           ref={canvasHandle}
+          tool={tool}
           brush={brush}
           brushRadius={brushRadius}
+          sourcePeriod={sourcePeriod}
+          sourceMode={sourceMode}
+          viewMode={viewMode}
           onUndoStackChange={setCanUndo}
         />
       </main>

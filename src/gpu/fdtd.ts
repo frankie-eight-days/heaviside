@@ -1,18 +1,25 @@
 import eShaderSrc from '../shaders/fdtd-e.wgsl?raw'
 import hShaderSrc from '../shaders/fdtd-h.wgsl?raw'
+import envShaderSrc from '../shaders/envelope.wgsl?raw'
 import renderShaderSrc from '../shaders/field-render.wgsl?raw'
 import type { GPUContext } from './init'
 
 const MAX_FIELD_DIM = 1024
 const SC = 1 / Math.SQRT2
-const SOURCE_PERIOD = 80
+
+// Reference period for the Df→σ conversion. Materials are painted with a σ
+// value calibrated to this reference; when the user changes frequency, the
+// painted σ stays fixed. See ADR 0003 for why this is fine for a single-tone
+// playground.
+const REFERENCE_PERIOD = 80
+
 const STEPS_PER_FRAME = 4
 
-// Convert engineering loss tangent (Df = tan δ) at the source's frequency
-// into the dimensionless σ-slider value the FDTD shader consumes. Derivation
-// in docs/decisions/0003: σ_slider = (ω·Δt · Dk · Df) / Sc, where ω·Δt = 2π / SOURCE_PERIOD.
+// Convert engineering loss tangent (Df = tan δ) at the source's reference
+// frequency into the dimensionless σ-slider value the FDTD shader consumes.
+// Derivation in docs/decisions/0003.
 export function dfToSigma(dk: number, df: number): number {
-  return ((2 * Math.PI) / SOURCE_PERIOD) * dk * df / SC
+  return ((2 * Math.PI) / REFERENCE_PERIOD) * dk * df / SC
 }
 
 // Berenger split-field PML — see M3 ADR notes.
@@ -23,6 +30,9 @@ const SIGMA_MAX =
   (-(PML_ORDER + 1) * Math.log(PML_TARGET_R)) / (2 * PML_THICKNESS)
 
 export const FLAG_PEC = 1
+
+export type SourceMode = 'off' | 'cw' | 'pulse'
+export type ViewMode = 'ez' | 'magnitude'
 
 export interface BrushSpec {
   epsilonR: number
@@ -42,6 +52,11 @@ export interface FDTDEngine {
   paint: (gridX: number, gridY: number, brushRadius: number, brush: BrushSpec) => void
   resetMaterials: () => void
   resetFields: () => void
+  setSource: (gridX: number, gridY: number) => void
+  setSourcePeriod: (period: number) => void
+  setSourceMode: (mode: SourceMode) => void
+  firePulse: () => void
+  setViewMode: (mode: ViewMode) => void
   snapshotMaterials: () => MaterialSnapshot
   restoreMaterials: (snapshot: MaterialSnapshot) => void
   getDims: () => { width: number; height: number }
@@ -98,7 +113,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   //  16: source_value:f32
   //  20: sc:f32
   //  24: pml_thickness:u32
-  //  28: _pad:u32
+  //  28: view_mode:u32          (0 = Ez, 1 = magnitude)
   const uniformBuffer = device.createBuffer({
     size: 32,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -108,6 +123,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   const uniformF32 = new Float32Array(uniformBytes)
   uniformF32[5] = SC
   uniformU32[6] = PML_THICKNESS
+  uniformU32[7] = 0
 
   const ePipeline = device.createComputePipeline({
     layout: 'auto',
@@ -120,6 +136,13 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     layout: 'auto',
     compute: {
       module: device.createShaderModule({ code: hShaderSrc }),
+      entryPoint: 'main',
+    },
+  })
+  const envPipeline = device.createComputePipeline({
+    layout: 'auto',
+    compute: {
+      module: device.createShaderModule({ code: envShaderSrc }),
       entryPoint: 'main',
     },
   })
@@ -142,18 +165,23 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   let pmlXBuffer: GPUBuffer | null = null
   let pmlYBuffer: GPUBuffer | null = null
   // Packed material grid: interleaved (epsilonR, sigma) as vec2<f32> per cell.
-  // Packed (rather than two parallel f32 buffers) to stay under the default
-  // WebGPU 8-storage-buffers-per-stage limit.
   let materialBuffer: GPUBuffer | null = null
   let flagsBuffer: GPUBuffer | null = null
+  let envBuffer: GPUBuffer | null = null
   let epsSigGrid: Float32Array | null = null
   let flagsGrid: Uint32Array | null = null
   let eBindGroup: GPUBindGroup | null = null
   let hBindGroup: GPUBindGroup | null = null
+  let envBindGroup: GPUBindGroup | null = null
   let renderBindGroup: GPUBindGroup | null = null
   let fieldW = 0
   let fieldH = 0
   let stepCount = 0
+
+  let sourcePeriod = REFERENCE_PERIOD
+  let sourceMode: SourceMode = 'cw'
+  // Step index of the pulse peak. Negative ⇒ no pulse pending.
+  let pulseT0 = -1
 
   function uploadMaterials() {
     if (!materialBuffer || !flagsBuffer) return
@@ -174,10 +202,12 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     pmlYBuffer?.destroy()
     materialBuffer?.destroy()
     flagsBuffer?.destroy()
+    envBuffer?.destroy()
 
     fieldW = w
     fieldH = h
     stepCount = 0
+    pulseT0 = -1
     epsSigGrid = new Float32Array(w * h * 2)
     for (let i = 0; i < w * h; i++) epsSigGrid[2 * i] = 1.0
     flagsGrid = new Uint32Array(w * h)
@@ -190,6 +220,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     hyBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
     materialBuffer = device.createBuffer({ size: fieldBytes * 2, usage: fieldUsage })
     flagsBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
+    envBuffer = device.createBuffer({ size: fieldBytes, usage: fieldUsage })
 
     const pmlX = buildPMLAxis(w)
     const pmlY = buildPMLAxis(h)
@@ -230,6 +261,15 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         { binding: 6, resource: { buffer: pmlYBuffer } },
       ],
     })
+    envBindGroup = device.createBindGroup({
+      layout: envPipeline.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: uniformBuffer } },
+        { binding: 1, resource: { buffer: ezxBuffer } },
+        { binding: 2, resource: { buffer: ezyBuffer } },
+        { binding: 3, resource: { buffer: envBuffer } },
+      ],
+    })
     renderBindGroup = device.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),
       entries: [
@@ -238,6 +278,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
         { binding: 2, resource: { buffer: ezyBuffer } },
         { binding: 3, resource: { buffer: materialBuffer } },
         { binding: 4, resource: { buffer: flagsBuffer } },
+        { binding: 5, resource: { buffer: envBuffer } },
       ],
     })
 
@@ -248,14 +289,30 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     uploadMaterials()
   }
 
+  function computeSourceValue(): number {
+    if (sourceMode === 'off') return 0
+    const phase = (2 * Math.PI * stepCount) / sourcePeriod
+    const cw = Math.sin(phase)
+    if (sourceMode === 'cw') return cw
+    if (pulseT0 < 0) return 0
+    const tau = sourcePeriod
+    const dt = (stepCount - pulseT0) / tau
+    if (Math.abs(dt) > 5) {
+      // Pulse has decayed below ~exp(-25); call it done so we don't fight the simulator.
+      pulseT0 = -1
+      return 0
+    }
+    return Math.exp(-dt * dt) * cw
+  }
+
   function step() {
-    if (!eBindGroup || !hBindGroup || !renderBindGroup) return
+    if (!eBindGroup || !hBindGroup || !envBindGroup || !renderBindGroup) return
 
     const workgroupsX = Math.ceil(fieldW / 8)
     const workgroupsY = Math.ceil(fieldH / 8)
 
     for (let s = 0; s < STEPS_PER_FRAME; s++) {
-      uniformF32[4] = Math.sin((2 * Math.PI * stepCount) / SOURCE_PERIOD)
+      uniformF32[4] = computeSourceValue()
       device.queue.writeBuffer(uniformBuffer, 0, uniformBytes)
 
       const encoder = device.createCommandEncoder()
@@ -271,6 +328,12 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
       ePass.setBindGroup(0, eBindGroup)
       ePass.dispatchWorkgroups(workgroupsX, workgroupsY)
       ePass.end()
+
+      const envPass = encoder.beginComputePass()
+      envPass.setPipeline(envPipeline)
+      envPass.setBindGroup(0, envBindGroup)
+      envPass.dispatchWorkgroups(workgroupsX, workgroupsY)
+      envPass.end()
 
       device.queue.submit([encoder.finish()])
       stepCount++
@@ -335,13 +398,43 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
   }
 
   function resetFields() {
-    if (!ezxBuffer || !ezyBuffer || !hxBuffer || !hyBuffer) return
+    if (!ezxBuffer || !ezyBuffer || !hxBuffer || !hyBuffer || !envBuffer) return
     const zeros = new Float32Array(fieldW * fieldH)
     device.queue.writeBuffer(ezxBuffer, 0, zeros)
     device.queue.writeBuffer(ezyBuffer, 0, zeros)
     device.queue.writeBuffer(hxBuffer, 0, zeros)
     device.queue.writeBuffer(hyBuffer, 0, zeros)
+    device.queue.writeBuffer(envBuffer, 0, zeros)
     stepCount = 0
+    pulseT0 = -1
+  }
+
+  function setSource(gridX: number, gridY: number) {
+    if (fieldW === 0) return
+    const sx = Math.max(0, Math.min(fieldW - 1, Math.floor(gridX)))
+    const sy = Math.max(0, Math.min(fieldH - 1, Math.floor(gridY)))
+    uniformU32[2] = sx
+    uniformU32[3] = sy
+  }
+
+  function setSourcePeriod(period: number) {
+    sourcePeriod = Math.max(4, period)
+  }
+
+  function setSourceMode(mode: SourceMode) {
+    sourceMode = mode
+    if (mode !== 'pulse') pulseT0 = -1
+  }
+
+  function firePulse() {
+    if (sourceMode !== 'pulse') return
+    // Half-period pre-roll: envelope at fire time is exp(-0.25) ≈ 0.78, so the
+    // wave packet is visible immediately and peaks ~τ/2 later (~0.17 s at 60 fps).
+    pulseT0 = stepCount + Math.round(sourcePeriod * 0.5)
+  }
+
+  function setViewMode(mode: ViewMode) {
+    uniformU32[7] = mode === 'magnitude' ? 1 : 0
   }
 
   function snapshotMaterials(): MaterialSnapshot {
@@ -378,6 +471,7 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     pmlYBuffer?.destroy()
     materialBuffer?.destroy()
     flagsBuffer?.destroy()
+    envBuffer?.destroy()
     uniformBuffer.destroy()
   }
 
@@ -388,6 +482,11 @@ export function createFDTD(gpu: GPUContext): FDTDEngine {
     paint,
     resetMaterials,
     resetFields,
+    setSource,
+    setSourcePeriod,
+    setSourceMode,
+    firePulse,
+    setViewMode,
     snapshotMaterials,
     restoreMaterials,
     getDims,

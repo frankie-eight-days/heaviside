@@ -11,7 +11,7 @@ struct Uniforms {
   source_value: f32,
   sc: f32,
   pml_thickness: u32,
-  _pad: u32,
+  view_mode: u32,
 };
 
 const FLAG_PEC: u32 = 1u;

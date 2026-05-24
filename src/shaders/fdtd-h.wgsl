@@ -9,7 +9,7 @@ struct Uniforms {
   source_value: f32,
   sc: f32,
   pml_thickness: u32,
-  _pad: u32,
+  view_mode: u32,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
