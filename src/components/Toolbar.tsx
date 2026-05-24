@@ -31,7 +31,7 @@ const TIP_SOURCE =
   'Place a source: click anywhere on the canvas to move the source to that cell. The yellow marker shows the current position. Combine with Pulse mode to fire a clean wavefront.'
 
 const TIP_PROBE =
-  'Place a probe: click on the canvas to drop a probe. Probes sample Ez every timestep — see the time waveform and FFT spectrum in the right panel. Up to 8 probes.'
+  'Place a probe: click to drop one, or click-and-drag to drop a line of evenly-spaced probes (great for VSWR along a transmission line). Up to 32 probes total.'
 
 const TIP_WAVELENGTH =
   'Wavelength in vacuum, measured in grid cells. Smaller wavelength = higher frequency. With Material painted nearby, the wavelength inside it shrinks by √Dk.'
@@ -107,6 +107,8 @@ interface ToolbarProps {
   modulation: ModulationParams
   onModulationChange: (params: Partial<ModulationParams>) => void
   onFirePulse: () => void
+  probesPerLine: number
+  onProbesPerLineChange: (n: number) => void
   viewMode: ViewMode
   onViewModeChange: (m: ViewMode) => void
   onUndo: () => void
@@ -134,6 +136,8 @@ export default function Toolbar({
   modulation,
   onModulationChange,
   onFirePulse,
+  probesPerLine,
+  onProbesPerLineChange,
   viewMode,
   onViewModeChange,
   onUndo,
@@ -325,6 +329,24 @@ export default function Toolbar({
             </button>
           )}
         </>
+      )}
+
+      {material === MAT_PROBE && (
+        <label
+          className="param-slider"
+          title="Number of probes placed when you click-and-drag a line on the canvas."
+        >
+          Probes per line
+          <input
+            type="range"
+            min={2}
+            max={32}
+            step={1}
+            value={probesPerLine}
+            onChange={(e) => onProbesPerLineChange(Number(e.target.value))}
+          />
+          <span className="param-value">{probesPerLine}</span>
+        </label>
       )}
 
       <label className="param-slider">

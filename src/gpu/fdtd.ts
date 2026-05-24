@@ -20,7 +20,8 @@ const STEPS_PER_FRAME = 4
 export const MAX_SOURCES = 128
 
 // Probe storage limits. See ADR 0008. 1024 samples × 240 sample/s = ~4 s window.
-export const MAX_PROBES = 8
+// 32 × 1024 × 4 = 128 KB of GPU + 128 KB of staging — still trivial.
+export const MAX_PROBES = 32
 export const PROBE_HISTORY_LEN = 1024
 
 export function dfToSigma(dk: number, df: number): number {

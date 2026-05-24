@@ -3,8 +3,6 @@ import type { GPUCanvasHandle } from './GPUCanvas'
 import type { ProbeHistorySnapshot, ProbeSpec } from '../gpu/fdtd'
 import { fftReal, hannWindow } from '../lib/fft'
 
-// Kept in sync with probe_color() in field-render.wgsl so the canvas marker
-// matches the plot trace for each probe.
 const PROBE_COLORS = [
   '#67c1ff',
   '#9ce066',
@@ -21,6 +19,13 @@ function probeColor(index: number): string {
 }
 
 type DisplayMode = 'single' | 'overlay'
+type SpectrumScale = 'linear' | 'db'
+
+interface ProbeMetrics {
+  peak: number
+  rms: number
+  phaseDeg: number
+}
 
 interface MeasurementPanelProps {
   probes: ProbeSpec[]
@@ -29,6 +34,8 @@ interface MeasurementPanelProps {
   onRemoveProbe: (index: number) => void
   onClearProbes: () => void
 }
+
+const METRICS_UPDATE_INTERVAL_MS = 100
 
 export default function MeasurementPanel({
   probes,
@@ -39,11 +46,14 @@ export default function MeasurementPanel({
 }: MeasurementPanelProps) {
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [displayMode, setDisplayMode] = useState<DisplayMode>('single')
+  const [spectrumScale, setSpectrumScale] = useState<SpectrumScale>('linear')
+  const [metrics, setMetrics] = useState<ProbeMetrics[]>([])
   const timeCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const spectrumCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const sourcePeriodRef = useRef(sourcePeriod)
   const selectedIndexRef = useRef(selectedIndex)
   const displayModeRef = useRef(displayMode)
+  const spectrumScaleRef = useRef(spectrumScale)
   useEffect(() => {
     sourcePeriodRef.current = sourcePeriod
   }, [sourcePeriod])
@@ -53,6 +63,9 @@ export default function MeasurementPanel({
   useEffect(() => {
     displayModeRef.current = displayMode
   }, [displayMode])
+  useEffect(() => {
+    spectrumScaleRef.current = spectrumScale
+  }, [spectrumScale])
 
   useEffect(() => {
     if (probes.length === 0) return
@@ -62,8 +75,9 @@ export default function MeasurementPanel({
   useEffect(() => {
     let raf = 0
     let cancelled = false
+    let lastMetricsUpdate = 0
 
-    const tick = () => {
+    const tick = (timestamp: number) => {
       if (cancelled) return
       const snap = canvasHandle.current?.getProbeHistory()
       if (snap && snap.probeCount > 0) {
@@ -73,18 +87,33 @@ export default function MeasurementPanel({
         }
         const globalPeak = computeGlobalPeak(snap)
         const sel = Math.min(selectedIndexRef.current, snap.probeCount - 1)
-        const mode = displayModeRef.current
-        drawTimeSeries(timeCanvasRef.current, allSamples, sel, mode, globalPeak)
+        drawTimeSeries(
+          timeCanvasRef.current,
+          allSamples,
+          sel,
+          displayModeRef.current,
+          globalPeak,
+        )
         drawSpectrum(
           spectrumCanvasRef.current,
           allSamples,
           sel,
-          mode,
+          displayModeRef.current,
           sourcePeriodRef.current,
+          spectrumScaleRef.current,
         )
+
+        if (timestamp - lastMetricsUpdate > METRICS_UPDATE_INTERVAL_MS) {
+          lastMetricsUpdate = timestamp
+          setMetrics(computeAllMetrics(snap, sourcePeriodRef.current))
+        }
       } else {
         clearPlot(timeCanvasRef.current)
         clearPlot(spectrumCanvasRef.current)
+        if (timestamp - lastMetricsUpdate > METRICS_UPDATE_INTERVAL_MS) {
+          lastMetricsUpdate = timestamp
+          setMetrics([])
+        }
       }
       raf = requestAnimationFrame(tick)
     }
@@ -95,17 +124,41 @@ export default function MeasurementPanel({
     }
   }, [canvasHandle])
 
+  const vswrInfo = computeVSWR(metrics)
+
   return (
     <aside className="measurement-panel">
       <div className="measurement-header">Measurements</div>
 
       {probes.length === 0 ? (
         <p className="measurement-empty">
-          Pick the <strong>Probe</strong> tool and click on the canvas to drop a probe.
-          You can compare up to 8 probes.
+          Pick the <strong>Probe</strong> tool and click on the canvas to drop a
+          probe. <strong>Click-drag</strong> to drop a line of probes along a
+          transmission line (great for VSWR).
         </p>
       ) : (
         <>
+          {vswrInfo && (
+            <div className="vswr-panel" title="Voltage Standing Wave Ratio across all probes. Drop probes along a transmission line for this to be meaningful.">
+              <div className="vswr-row">
+                <span className="vswr-label">VSWR</span>
+                <span className="vswr-value">{formatVSWR(vswrInfo.vswr)}</span>
+              </div>
+              <div className="vswr-row">
+                <span className="vswr-label">|Γ|</span>
+                <span className="vswr-value">{vswrInfo.gamma.toFixed(3)}</span>
+              </div>
+              <div className="vswr-row">
+                <span className="vswr-label">Return loss</span>
+                <span className="vswr-value">
+                  {isFinite(vswrInfo.returnLoss)
+                    ? `${vswrInfo.returnLoss.toFixed(1)} dB`
+                    : '∞ dB'}
+                </span>
+              </div>
+            </div>
+          )}
+
           <div className="probe-list-header">
             <span>{probes.length} probe{probes.length === 1 ? '' : 's'}</span>
             <button type="button" className="link-btn" onClick={onClearProbes}>
@@ -113,35 +166,48 @@ export default function MeasurementPanel({
             </button>
           </div>
           <ul className="probe-list">
-            {probes.map((p, i) => (
-              <li key={i} className="probe-row">
-                <button
-                  type="button"
-                  className={
-                    'probe-item' + (selectedIndex === i ? ' probe-item--active' : '')
-                  }
-                  onClick={() => setSelectedIndex(i)}
-                >
-                  <span
-                    className="probe-swatch"
-                    style={{ background: probeColor(i) }}
-                  />
-                  <span className="probe-label">P{i + 1}</span>
-                  <span className="probe-pos">
-                    ({p.x}, {p.y})
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  className="probe-remove"
-                  onClick={() => onRemoveProbe(i)}
-                  title="Remove probe"
-                  aria-label={`Remove probe ${i + 1}`}
-                >
-                  ×
-                </button>
-              </li>
-            ))}
+            {probes.map((p, i) => {
+              const m = metrics[i]
+              return (
+                <li key={i} className="probe-row">
+                  <button
+                    type="button"
+                    className={
+                      'probe-item' + (selectedIndex === i ? ' probe-item--active' : '')
+                    }
+                    onClick={() => setSelectedIndex(i)}
+                  >
+                    <span
+                      className="probe-swatch"
+                      style={{ background: probeColor(i) }}
+                    />
+                    <div className="probe-info">
+                      <div className="probe-info-line">
+                        <span className="probe-label">P{i + 1}</span>
+                        <span className="probe-pos">
+                          ({p.x}, {p.y})
+                        </span>
+                      </div>
+                      {m && (
+                        <div className="probe-metrics">
+                          pk {m.peak.toFixed(3)} · rms {m.rms.toFixed(3)} · Δφ{' '}
+                          {formatPhase(i, m.phaseDeg)}
+                        </div>
+                      )}
+                    </div>
+                  </button>
+                  <button
+                    type="button"
+                    className="probe-remove"
+                    onClick={() => onRemoveProbe(i)}
+                    title="Remove probe"
+                    aria-label={`Remove probe ${i + 1}`}
+                  >
+                    ×
+                  </button>
+                </li>
+              )
+            })}
           </ul>
 
           {probes.length > 1 && (
@@ -182,7 +248,27 @@ export default function MeasurementPanel({
 
           <div className="probe-plot">
             <div className="probe-plot-title">
-              Spectrum <span className="probe-plot-axis">|FFT|, freq (cycles/step) →</span>
+              <span>Spectrum</span>
+              <div className="segmented spectrum-scale">
+                <button
+                  type="button"
+                  className={
+                    'seg-btn' + (spectrumScale === 'linear' ? ' seg-btn--active' : '')
+                  }
+                  onClick={() => setSpectrumScale('linear')}
+                >
+                  Lin
+                </button>
+                <button
+                  type="button"
+                  className={
+                    'seg-btn' + (spectrumScale === 'db' ? ' seg-btn--active' : '')
+                  }
+                  onClick={() => setSpectrumScale('db')}
+                >
+                  dB
+                </button>
+              </div>
             </div>
             <canvas ref={spectrumCanvasRef} className="probe-plot-canvas" />
           </div>
@@ -190,6 +276,18 @@ export default function MeasurementPanel({
       )}
     </aside>
   )
+}
+
+function formatVSWR(vswr: number): string {
+  if (!isFinite(vswr)) return '∞'
+  if (vswr > 99) return '> 99'
+  return vswr.toFixed(2)
+}
+
+function formatPhase(probeIndex: number, phaseDeg: number): string {
+  if (probeIndex === 0) return '0°'
+  const sign = phaseDeg >= 0 ? '+' : ''
+  return `${sign}${phaseDeg.toFixed(0)}°`
 }
 
 function extractChronological(
@@ -212,6 +310,65 @@ function computeGlobalPeak(snap: ProbeHistorySnapshot): number {
     if (a > peak) peak = a
   }
   return peak
+}
+
+function computeAllMetrics(
+  snap: ProbeHistorySnapshot,
+  sourcePeriod: number,
+): ProbeMetrics[] {
+  const N = snap.historyLen
+  const sourceBin = Math.max(
+    1,
+    Math.min(N / 2 - 1, Math.round(N / sourcePeriod)),
+  )
+  const win = hannWindow(N)
+  const result: ProbeMetrics[] = []
+  let p1Phase = 0
+  for (let p = 0; p < snap.probeCount; p++) {
+    const samples = extractChronological(snap, p)
+    let peak = 0
+    let sumSq = 0
+    for (let i = 0; i < N; i++) {
+      const a = Math.abs(samples[i])
+      if (a > peak) peak = a
+      sumSq += samples[i] * samples[i]
+    }
+    const rms = Math.sqrt(sumSq / N)
+
+    const windowed = new Float32Array(N)
+    for (let i = 0; i < N; i++) windowed[i] = samples[i] * win[i]
+    const { re, im } = fftReal(windowed)
+    const phase = Math.atan2(im[sourceBin], re[sourceBin])
+    if (p === 0) p1Phase = phase
+    let relPhase = phase - p1Phase
+    while (relPhase > Math.PI) relPhase -= 2 * Math.PI
+    while (relPhase < -Math.PI) relPhase += 2 * Math.PI
+
+    result.push({ peak, rms, phaseDeg: (relPhase * 180) / Math.PI })
+  }
+  return result
+}
+
+function computeVSWR(metrics: ProbeMetrics[]): {
+  vswr: number
+  gamma: number
+  returnLoss: number
+} | null {
+  if (metrics.length < 2) return null
+  let max = 0
+  let min = Infinity
+  for (const m of metrics) {
+    if (m.peak > max) max = m.peak
+    if (m.peak < min) min = m.peak
+  }
+  if (max < 1e-4) return null
+  if (min < 1e-6) {
+    return { vswr: Infinity, gamma: 1, returnLoss: 0 }
+  }
+  const vswr = max / min
+  const gamma = (vswr - 1) / (vswr + 1)
+  const returnLoss = gamma > 1e-9 ? -20 * Math.log10(gamma) : Infinity
+  return { vswr, gamma, returnLoss }
 }
 
 function ensureCanvasSize(canvas: HTMLCanvasElement | null): {
@@ -270,7 +427,6 @@ function drawTimeSeries(
       : [Math.min(selectedIndex, allSamples.length - 1)]
   const xStep = w / Math.max(1, allSamples[0].length - 1)
 
-  // Draw non-selected probes first so the selected one paints on top.
   const drawOrder = [...indices].sort((a, b) =>
     a === selectedIndex ? 1 : b === selectedIndex ? -1 : 0,
   )
@@ -307,6 +463,7 @@ function drawSpectrum(
   selectedIndex: number,
   mode: DisplayMode,
   sourcePeriod: number,
+  scale: SpectrumScale,
 ) {
   const r = ensureCanvasSize(canvas)
   if (!r) return
@@ -322,7 +479,6 @@ function drawSpectrum(
       ? allSamples.map((_, i) => i)
       : [Math.min(selectedIndex, allSamples.length - 1)]
 
-  // Pre-compute magnitudes for everyone we're going to draw.
   const mags: Float32Array[] = indices.map((p) => {
     const windowed = new Float32Array(N)
     const samples = allSamples[p]
@@ -331,16 +487,25 @@ function drawSpectrum(
   })
 
   const sourceBin = N / Math.max(4, sourcePeriod)
-  const maxBin = Math.min(
-    mags[0].length,
-    Math.max(32, Math.ceil(sourceBin * 10)),
-  )
+  const maxBin = Math.min(mags[0].length, Math.max(32, Math.ceil(sourceBin * 10)))
 
-  // Peak across all displayed spectra (excluding DC) for stable scale.
   let peak = 1e-6
   for (const m of mags) {
     for (let i = 1; i < maxBin; i++) {
       if (m[i] > peak) peak = m[i]
+    }
+  }
+
+  // dB-scale gridlines at -20, -40 dB.
+  if (scale === 'db') {
+    ctx.strokeStyle = '#1a1a24'
+    ctx.lineWidth = 1
+    for (const db of [-20, -40]) {
+      const y = h - ((db + 60) / 60) * (h - 4) - 2
+      ctx.beginPath()
+      ctx.moveTo(0, y)
+      ctx.lineTo(w, y)
+      ctx.stroke()
     }
   }
 
@@ -371,7 +536,15 @@ function drawSpectrum(
     ctx.beginPath()
     for (let bin = 0; bin < maxBin; bin++) {
       const x = bin * xStep
-      const y = h - (m[bin] / peak) * (h - 4)
+      const norm = m[bin] / peak
+      let yNorm: number
+      if (scale === 'db') {
+        const db = norm > 1e-9 ? 20 * Math.log10(norm) : -120
+        yNorm = Math.max(0, (db + 60) / 60)
+      } else {
+        yNorm = norm
+      }
+      const y = h - yNorm * (h - 4)
       if (bin === 0) ctx.moveTo(x, y)
       else ctx.lineTo(x, y)
     }
@@ -380,7 +553,6 @@ function drawSpectrum(
   ctx.globalAlpha = 1.0
   ctx.lineWidth = 1
 
-  // Peak readout from the selected probe's spectrum.
   const selMag = mags[Math.max(0, drawOrder[drawOrder.length - 1])]
   let peakBin = 1
   for (let bin = 2; bin < maxBin; bin++) {

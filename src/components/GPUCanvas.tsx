@@ -15,6 +15,7 @@ import {
 import type { Scene, SceneConfig } from '../scenes/types'
 
 const MAX_UNDO = 10
+const PROBE_LINE_MIN_DRAG_CELLS = 5
 
 export type Tool = 'paint' | 'source' | 'probe'
 
@@ -38,7 +39,8 @@ interface GPUCanvasProps {
   modulation: ModulationParams
   viewMode: ViewMode
   probes: ProbeSpec[]
-  onProbePlaced: (gridX: number, gridY: number) => void
+  probesPerLine: number
+  onProbesPlaced: (positions: ProbeSpec[]) => void
   onUndoStackChange: (canUndo: boolean) => void
 }
 
@@ -53,18 +55,24 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     modulation,
     viewMode,
     probes,
-    onProbePlaced,
+    probesPerLine,
+    onProbesPlaced,
     onUndoStackChange,
   },
   ref,
 ) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const overlayRef = useRef<HTMLCanvasElement | null>(null)
   const engineRef = useRef<FDTDEngine | null>(null)
   const undoStackRef = useRef<MaterialSnapshot[]>([])
   const isPaintingRef = useRef(false)
   const brushRef = useRef(brush)
   const brushRadiusRef = useRef(brushRadius)
   const toolRef = useRef(tool)
+  const probesPerLineRef = useRef(probesPerLine)
+  const dragStartRef = useRef<[number, number] | null>(null)
+  const dragEndRef = useRef<[number, number] | null>(null)
+  const dragToolRef = useRef<Tool | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -76,6 +84,9 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   useEffect(() => {
     toolRef.current = tool
   }, [tool])
+  useEffect(() => {
+    probesPerLineRef.current = probesPerLine
+  }, [probesPerLine])
   useEffect(() => {
     engineRef.current?.setSourcePeriod(sourcePeriod)
   }, [sourcePeriod])
@@ -122,8 +133,6 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
       if (!engine) return null
       const dims = engine.getDims()
       if (dims.width === 0 || dims.height === 0) return null
-      // Scenes mutate materials freely; drop the undo stack so a stale
-      // pre-scene snapshot doesn't restore half the previous layout.
       undoStackRef.current = []
       onUndoStackChange(false)
       return scene.apply(engine, dims)
@@ -139,7 +148,7 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     let raf = 0
     let cancelled = false
 
-    const parent = canvas.parentElement
+    const parent = canvas.parentElement?.parentElement
     let lastW = 0
     let lastH = 0
     const fit = () => {
@@ -154,6 +163,13 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
         canvas.style.height = `${h}px`
         canvas.width = Math.max(1, Math.floor(w * dpr))
         canvas.height = Math.max(1, Math.floor(h * dpr))
+        const overlay = overlayRef.current
+        if (overlay) {
+          overlay.style.width = `${w}px`
+          overlay.style.height = `${h}px`
+          overlay.width = canvas.width
+          overlay.height = canvas.height
+        }
       }
       engineRef.current?.resize(w, h)
     }
@@ -211,6 +227,76 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     return [gridX, gridY]
   }
 
+  const drawProbeLinePreview = () => {
+    const overlay = overlayRef.current
+    if (!overlay) return
+    const ctx = overlay.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, overlay.width, overlay.height)
+    const start = dragStartRef.current
+    const end = dragEndRef.current
+    const engine = engineRef.current
+    if (!start || !end || !engine) return
+    const { width: W, height: H } = engine.getDims()
+    const cssW = overlay.clientWidth
+    const cssH = overlay.clientHeight
+    const dpr = window.devicePixelRatio || 1
+    const sx = (cssW * dpr) / W
+    const sy = (cssH * dpr) / H
+
+    const x1 = (start[0] + 0.5) * sx
+    const y1 = (start[1] + 0.5) * sy
+    const x2 = (end[0] + 0.5) * sx
+    const y2 = (end[1] + 0.5) * sy
+
+    const dx = end[0] - start[0]
+    const dy = end[1] - start[1]
+    const dist = Math.sqrt(dx * dx + dy * dy)
+    const isLine = dist >= PROBE_LINE_MIN_DRAG_CELLS
+
+    if (isLine) {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.35)'
+      ctx.lineWidth = 1 * dpr
+      ctx.setLineDash([4 * dpr, 4 * dpr])
+      ctx.beginPath()
+      ctx.moveTo(x1, y1)
+      ctx.lineTo(x2, y2)
+      ctx.stroke()
+      ctx.setLineDash([])
+
+      const n = probesPerLineRef.current
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)'
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)'
+      ctx.lineWidth = 1 * dpr
+      for (let i = 0; i < n; i++) {
+        const t = n === 1 ? 0 : i / (n - 1)
+        const x = x1 + t * (x2 - x1)
+        const y = y1 + t * (y2 - y1)
+        ctx.beginPath()
+        ctx.arc(x, y, 3 * dpr, 0, 2 * Math.PI)
+        ctx.fill()
+        ctx.stroke()
+      }
+    } else {
+      // Single-click preview: just a circle at the start.
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.85)'
+      ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)'
+      ctx.lineWidth = 1 * dpr
+      ctx.beginPath()
+      ctx.arc(x1, y1, 3 * dpr, 0, 2 * Math.PI)
+      ctx.fill()
+      ctx.stroke()
+    }
+  }
+
+  const clearOverlay = () => {
+    const overlay = overlayRef.current
+    if (!overlay) return
+    const ctx = overlay.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, overlay.width, overlay.height)
+  }
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const engine = engineRef.current
     if (!engine) return
@@ -221,7 +307,11 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
       return
     }
     if (toolRef.current === 'probe') {
-      onProbePlaced(g[0], g[1])
+      dragStartRef.current = g
+      dragEndRef.current = g
+      dragToolRef.current = 'probe'
+      e.currentTarget.setPointerCapture(e.pointerId)
+      drawProbeLinePreview()
       return
     }
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -233,6 +323,14 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   }
 
   const onPointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (dragToolRef.current === 'probe') {
+      const g = eventToGrid(e)
+      if (g) {
+        dragEndRef.current = g
+        drawProbeLinePreview()
+      }
+      return
+    }
     if (!isPaintingRef.current) return
     const engine = engineRef.current
     if (!engine) return
@@ -241,6 +339,37 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   }
 
   const onPointerEnd = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (dragToolRef.current === 'probe') {
+      const start = dragStartRef.current
+      const end = dragEndRef.current
+      if (start && end) {
+        const dx = end[0] - start[0]
+        const dy = end[1] - start[1]
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        if (dist < PROBE_LINE_MIN_DRAG_CELLS) {
+          onProbesPlaced([{ x: start[0], y: start[1] }])
+        } else {
+          const n = probesPerLineRef.current
+          const positions: ProbeSpec[] = []
+          for (let i = 0; i < n; i++) {
+            const t = n === 1 ? 0 : i / (n - 1)
+            positions.push({
+              x: Math.round(start[0] + t * dx),
+              y: Math.round(start[1] + t * dy),
+            })
+          }
+          onProbesPlaced(positions)
+        }
+      }
+      clearOverlay()
+      dragStartRef.current = null
+      dragEndRef.current = null
+      dragToolRef.current = null
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId)
+      }
+      return
+    }
     if (!isPaintingRef.current) return
     isPaintingRef.current = false
     if (e.currentTarget.hasPointerCapture(e.pointerId)) {
@@ -258,13 +387,16 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
   }
 
   return (
-    <canvas
-      ref={canvasRef}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerEnd}
-      onPointerCancel={onPointerEnd}
-    />
+    <div className="canvas-stack">
+      <canvas
+        ref={canvasRef}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerEnd}
+        onPointerCancel={onPointerEnd}
+      />
+      <canvas ref={overlayRef} className="overlay-canvas" />
+    </div>
   )
 })
 

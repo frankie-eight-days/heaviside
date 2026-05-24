@@ -39,6 +39,7 @@ export default function App() {
   const [canUndo, setCanUndo] = useState(false)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null)
   const [probes, setProbes] = useState<ProbeSpec[]>([])
+  const [probesPerLine, setProbesPerLine] = useState(8)
   const canvasHandle = useRef<GPUCanvasHandle | null>(null)
 
   const tool: Tool =
@@ -78,10 +79,11 @@ export default function App() {
     setModulation((prev) => ({ ...prev, ...params }))
   }, [])
 
-  const handleProbePlaced = useCallback((x: number, y: number) => {
+  const handleProbesPlaced = useCallback((positions: ProbeSpec[]) => {
     setProbes((prev) => {
-      if (prev.length >= 8) return prev
-      return [...prev, { x, y }]
+      const remaining = 32 - prev.length
+      if (remaining <= 0) return prev
+      return [...prev, ...positions.slice(0, remaining)]
     })
   }, [])
 
@@ -154,6 +156,8 @@ export default function App() {
         modulation={modulation}
         onModulationChange={handleModulationChange}
         onFirePulse={handleFirePulse}
+        probesPerLine={probesPerLine}
+        onProbesPerLineChange={setProbesPerLine}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
         onUndo={handleUndo}
@@ -173,7 +177,8 @@ export default function App() {
           modulation={modulation}
           viewMode={viewMode}
           probes={probes}
-          onProbePlaced={handleProbePlaced}
+          probesPerLine={probesPerLine}
+          onProbesPlaced={handleProbesPlaced}
           onUndoStackChange={setCanUndo}
         />
       </main>
