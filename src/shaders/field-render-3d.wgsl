@@ -71,9 +71,12 @@ const MAG_GAIN: f32 = 1.6;
 
 // Volume ray-march constants.
 const VOL_FOV: f32 = 0.6;        // ~34° vertical FOV
-const VOL_MAX_STEPS: u32 = 256u;
-const VOL_STEP: f32 = 1.0;       // one cell per step
-const VOL_DENSITY: f32 = 0.12;   // alpha contribution per step at max brightness
+// Step + max_steps trade: 128³ grid diagonal is ~222 cells. step=2 with
+// max_steps=128 covers the diagonal at 4× less work than step=1, max=256.
+// Density scales up to keep per-ray transparency roughly constant.
+const VOL_MAX_STEPS: u32 = 128u;
+const VOL_STEP: f32 = 2.0;
+const VOL_DENSITY: f32 = 0.20;
 
 fn heat_color(v: f32) -> vec3<f32> {
   let t = clamp(v, 0.0, 1.0);
