@@ -1,6 +1,6 @@
 import type { FDTDEngine, Polarization, ProbeSpec, SourceMode, ViewMode } from '../gpu/fdtd'
 
-export type SceneCategory = 'antennas' | 'pcb'
+export type SceneCategory = 'antennas' | 'pcb' | '3d'
 
 // React-tracked state the scene wants to install. App applies this after the
 // scene's apply() runs so the Toolbar / sliders reflect the scene's config.

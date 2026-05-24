@@ -9,6 +9,7 @@ import { txRxLink } from './antennas/tx-rx-link'
 import { microstrip } from './pcb/microstrip'
 import { stripline } from './pcb/stripline'
 import { differentialPair } from './pcb/differential-pair'
+import { pointSource3D } from './3d/point-source-3d'
 
 export type { Scene, SceneCategory } from './types'
 
@@ -23,4 +24,5 @@ export const ALL_SCENES: Scene[] = [
   microstrip,
   stripline,
   differentialPair,
+  pointSource3D,
 ]

@@ -11,7 +11,8 @@ const TIP_TMZ =
 const TIP_TEZ =
   'TEz: Hz points out of the page, Ex and Ey in plane. Best for transmission-line cross-sections — Ey is the textbook vertical E-field between microstrip trace and ground.'
 
-const TIP_3D = '3D FDTD — M9 work. Six field components, volume rendering, real radiation patterns.'
+const TIP_3D =
+  '3D FDTD with six field components (Ex, Ey, Ez, Hx, Hy, Hz). Slice viewer at midplane by default. Heavier than 2D — defaults to a 128³ grid; 256³ supported. M9a foundation: hard PEC walls; CPML in M9b.'
 
 export default function PolarizationToggle({
   polarization,
@@ -37,11 +38,11 @@ export default function PolarizationToggle({
       </button>
       <button
         type="button"
-        className="seg-btn seg-btn--disabled"
-        disabled
+        className={'seg-btn' + (polarization === '3D' ? ' seg-btn--active' : '')}
+        onClick={() => onChange('3D')}
         title={TIP_3D}
       >
-        3D (soon)
+        3D
       </button>
     </div>
   )

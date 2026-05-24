@@ -9,9 +9,10 @@ interface ExamplesSidebarProps {
 const CATEGORY_LABEL: Record<SceneCategory, string> = {
   antennas: 'Antennas',
   pcb: 'PCB structures',
+  '3d': '3D (M9)',
 }
 
-const CATEGORY_ORDER: SceneCategory[] = ['antennas', 'pcb']
+const CATEGORY_ORDER: SceneCategory[] = ['antennas', 'pcb', '3d']
 
 export default function ExamplesSidebar({
   scenes,

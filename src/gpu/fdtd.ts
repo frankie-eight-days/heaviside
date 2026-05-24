@@ -37,9 +37,8 @@ const SIGMA_MAX =
 
 export const FLAG_PEC = 1
 
-// Active engine polarizations. '3D' is reserved for M9 — UI lists it as a
-// disabled option but the engine factory only accepts the two below.
-export type Polarization = 'TMz' | 'TEz'
+// Active engine polarizations. See ADR 0009 (TEz) and ADR 0010 (3D).
+export type Polarization = 'TMz' | 'TEz' | '3D'
 
 export type SourceMode = 'off' | 'cw' | 'pulse'
 export type SourceWaveform = 'sine' | 'square' | 'triangle' | 'sawtooth' | 'am' | 'fm'
@@ -86,6 +85,23 @@ export interface ProbeSpec {
   y: number
 }
 
+export interface SourceSpec3D {
+  x: number
+  y: number
+  z: number
+  phase: number
+  amplitude: number
+  polarization?: SourcePolarization
+}
+
+export interface ProbeSpec3D {
+  x: number
+  y: number
+  z: number
+}
+
+export type ViewAxis3D = 'xy' | 'xz' | 'yz'
+
 export interface ProbeHistorySnapshot {
   // Flat MAX_PROBES × PROBE_HISTORY_LEN array. Slot p · PROBE_HISTORY_LEN + i
   // holds sample i for probe p. Sample at offset `head` is the oldest;
@@ -107,6 +123,10 @@ export interface MaterialSnapshot {
   flags: Uint32Array
 }
 
+// Common interface implemented by all engines. 3D engines additionally
+// implement FDTDEngine3D below — their 2D-shaped methods (paint, placeSource,
+// setSources, setProbes, getDims) are wired through to XY-at-active-slice
+// semantics so the React shell can drive both engine families uniformly.
 export interface FDTDEngine {
   polarization: Polarization
   resize: (cssWidth: number, cssHeight: number) => void
@@ -131,6 +151,15 @@ export interface FDTDEngine {
   restoreMaterials: (snapshot: MaterialSnapshot) => void
   getDims: () => { width: number; height: number }
   pmlThickness: number
+}
+
+// 3D engine extends the common interface with 3D-native operations. Scenes
+// targeting polarization='3D' cast the engine to FDTDEngine3D to use these.
+export interface FDTDEngine3D extends FDTDEngine {
+  setSources3D: (sources: SourceSpec3D[]) => void
+  setProbes3D: (probes: ProbeSpec3D[]) => void
+  getDims3D: () => { width: number; height: number; depth: number }
+  setViewSlice: (axis: ViewAxis3D, depth: number) => void
 }
 
 function fieldDimsFromCanvas(w: number, h: number): [number, number] {
