@@ -2,26 +2,33 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import GPUCanvas, { type GPUCanvasHandle } from './components/GPUCanvas'
 import Toolbar, {
   MAT_PEC,
-  MAT_LOSSY,
-  MAT_DIELECTRIC,
+  MAT_MATERIAL,
+  type MaterialPreset,
 } from './components/Toolbar'
-import type { BrushSpec } from './gpu/fdtd'
+import { dfToSigma, type BrushSpec } from './gpu/fdtd'
 import './App.css'
 
 export default function App() {
   const [material, setMaterial] = useState<number>(MAT_PEC)
   const [brushRadius, setBrushRadius] = useState(5)
-  const [epsilonR, setEpsilonR] = useState(4)
-  const [sigma, setSigma] = useState(1)
+  const [dk, setDk] = useState(4.4)
+  const [df, setDf] = useState(0.02)
   const [canUndo, setCanUndo] = useState(false)
   const canvasHandle = useRef<GPUCanvasHandle | null>(null)
 
   const brush = useMemo<BrushSpec>(() => {
     if (material === MAT_PEC) return { epsilonR: 1, sigma: 0, pec: true }
-    if (material === MAT_DIELECTRIC) return { epsilonR, sigma: 0, pec: false }
-    if (material === MAT_LOSSY) return { epsilonR: 1, sigma, pec: false }
+    if (material === MAT_MATERIAL) {
+      return { epsilonR: dk, sigma: dfToSigma(dk, df), pec: false }
+    }
     return { epsilonR: 1, sigma: 0, pec: false }
-  }, [material, epsilonR, sigma])
+  }, [material, dk, df])
+
+  const handlePreset = useCallback((p: MaterialPreset) => {
+    setDk(p.dk)
+    setDf(p.df)
+    setMaterial(MAT_MATERIAL)
+  }, [])
 
   const handleUndo = useCallback(() => {
     canvasHandle.current?.undo()
@@ -52,7 +59,7 @@ export default function App() {
       <header className="header">
         <h1>EM Playground</h1>
         <span className="subtitle">
-          Paint PEC / lossy / dielectric materials and watch waves interact.
+          Paint PEC or dielectric/lossy materials (Dk, Df) and watch waves interact.
         </span>
       </header>
       <Toolbar
@@ -60,10 +67,11 @@ export default function App() {
         onMaterialChange={setMaterial}
         brushRadius={brushRadius}
         onBrushChange={setBrushRadius}
-        epsilonR={epsilonR}
-        onEpsilonRChange={setEpsilonR}
-        sigma={sigma}
-        onSigmaChange={setSigma}
+        dk={dk}
+        onDkChange={setDk}
+        df={df}
+        onDfChange={setDf}
+        onPreset={handlePreset}
         onUndo={handleUndo}
         onResetFields={handleResetFields}
         onResetMaterials={handleResetMaterials}

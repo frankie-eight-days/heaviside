@@ -35,10 +35,12 @@ fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
 
 const DISPLAY_GAIN: f32 = 3.0;
 
-// Continuous tint. Calibration: σ=1 → M3 lossy color, εr=4 → M3 dielectric color.
+// Continuous tint. sqrt(σ) on the lossy channel so small loss tangents
+// (Df ≈ 0.02 for FR-4, ≈ 0.001 for glass) still leave a visible hint,
+// while saturating gracefully toward σ=2.
 fn material_bg(er: f32, s: f32, pec: bool) -> vec3<f32> {
   if (pec) { return vec3<f32>(0.75, 0.75, 0.78); }
-  let lossy_tint = vec3<f32>(0.22, 0.10, 0.06) * clamp(s, 0.0, 2.0);
+  let lossy_tint = vec3<f32>(0.22, 0.10, 0.06) * clamp(sqrt(s) * 1.2, 0.0, 1.6);
   let diel_tint  = vec3<f32>(0.04, 0.16, 0.24) * clamp((er - 1.0) / 3.0, 0.0, 2.0);
   return lossy_tint + diel_tint;
 }

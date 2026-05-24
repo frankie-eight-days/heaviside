@@ -94,6 +94,39 @@
   color: #888;
 }
 
+.info-glyph {
+  color: #666;
+  font-size: 11px;
+  cursor: help;
+}
+
+.param-slider:hover .info-glyph {
+  color: #aaa;
+}
+
+.preset-group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.preset-btn {
+  padding: 4px 10px;
+  background: #14141c;
+  border: 1px solid #2a2a35;
+  border-radius: 999px;
+  color: #cfcfd4;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.1s, background 0.1s;
+}
+
+.preset-btn:hover {
+  border-color: #4a4a5a;
+  background: #1a1a22;
+}
+
 .action-group {
   display: flex;
   gap: 6px;

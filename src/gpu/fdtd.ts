@@ -8,6 +8,13 @@ const SC = 1 / Math.SQRT2
 const SOURCE_PERIOD = 80
 const STEPS_PER_FRAME = 4
 
+// Convert engineering loss tangent (Df = tan δ) at the source's frequency
+// into the dimensionless σ-slider value the FDTD shader consumes. Derivation
+// in docs/decisions/0003: σ_slider = (ω·Δt · Dk · Df) / Sc, where ω·Δt = 2π / SOURCE_PERIOD.
+export function dfToSigma(dk: number, df: number): number {
+  return ((2 * Math.PI) / SOURCE_PERIOD) * dk * df / SC
+}
+
 // Berenger split-field PML — see M3 ADR notes.
 const PML_THICKNESS = 12
 const PML_ORDER = 3
