@@ -117,8 +117,12 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
     let field = heat_color(sqrt(m) * MAG_GAIN);
     result = clamp(bg * 0.5 + field, vec3<f32>(0.0), vec3<f32>(1.0));
   } else {
+    // Signed-Ez view: sqrt(|v|) nonlinearity boosts low-amplitude regions
+    // without re-clipping the source. Linear-only made distant cells (where
+    // the wave amplitude is dropping with distance) effectively black.
     let v = ezx[k] + ezy[k];
-    let n = clamp(v * DISPLAY_GAIN, -1.0, 1.0);
+    let sgn = sign(v);
+    let n = clamp(sgn * sqrt(abs(v)) * DISPLAY_GAIN, -1.0, 1.0);
     let pos = max(n, 0.0);
     let neg = max(-n, 0.0);
     let field = vec3<f32>(pos, 0.06 * (pos + neg), neg);

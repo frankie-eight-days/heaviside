@@ -413,6 +413,8 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
       { binding: 1, resource: { buffer: ezBuf } },
       { binding: 2, resource: { buffer: envBuf } },
       { binding: 3, resource: { buffer: materialBuffer } },
+      { binding: 4, resource: { buffer: sourcesBuffer } },
+      { binding: 5, resource: { buffer: probesBuffer } },
     ],
   })
 

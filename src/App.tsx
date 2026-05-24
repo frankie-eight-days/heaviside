@@ -208,6 +208,7 @@ export default function App() {
         onUndo={handleUndo}
         onResetFields={handleResetFields}
         onResetMaterials={handleResetMaterials}
+        onResetProbes={handleClearProbes}
         canUndo={canUndo}
       />
       <main className="canvas-wrap">

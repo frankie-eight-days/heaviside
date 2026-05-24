@@ -129,6 +129,7 @@ interface ToolbarProps {
   onUndo: () => void
   onResetFields: () => void
   onResetMaterials: () => void
+  onResetProbes: () => void
   canUndo: boolean
 }
 
@@ -167,6 +168,7 @@ export default function Toolbar({
   onUndo,
   onResetFields,
   onResetMaterials,
+  onResetProbes,
   canUndo,
 }: ToolbarProps) {
   const wavelength = periodToWavelength(sourcePeriod)
@@ -498,6 +500,9 @@ export default function Toolbar({
         </button>
         <button type="button" onClick={onResetMaterials} className="action-btn">
           Reset materials
+        </button>
+        <button type="button" onClick={onResetProbes} className="action-btn">
+          Reset probes
         </button>
       </div>
     </div>
