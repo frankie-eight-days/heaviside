@@ -30,9 +30,12 @@ export const verticalDipole3D: Scene = {
     const arm = Math.max(2, Math.floor(lambdaCells * 0.21))
     const gap = 2
 
-    // Single-cell-cross-section arms along z. Thin-wire approximation.
-    engine3D.paintBox3D(cx, cy, cz + gap + 1, cx, cy, cz + gap + arm, PEC_BRUSH)
-    engine3D.paintBox3D(cx, cy, cz - gap - arm, cx, cy, cz - gap - 1, PEC_BRUSH)
+    // 3×3-cell-cross-section arms along z. Thicker than a true thin-wire
+    // antenna but the volume render and oblique camera angle make 1×1 arms
+    // appear disconnected (the ray-march steps 2 cells and skips between
+    // them). 3×3 reads as a solid bar from any view.
+    engine3D.paintBox3D(cx - 1, cy - 1, cz + gap + 1, cx + 1, cy + 1, cz + gap + arm, PEC_BRUSH)
+    engine3D.paintBox3D(cx - 1, cy - 1, cz - gap - arm, cx + 1, cy + 1, cz - gap - 1, PEC_BRUSH)
 
     // Feed-gap source: Ez at the antenna center drives current along z.
     engine3D.setSources3D([

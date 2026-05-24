@@ -448,10 +448,10 @@ export default function Toolbar({
         )}
       </div>
 
-      {viewMode === 'ez' && (
+      {(viewMode === 'ez' || viewMode === 'volume') && (
         <label
           className="param-slider"
-          title="Brightness gain on the signed-field view. Higher = far-field rings more visible; lower = mostly near-source amplitude."
+          title="Brightness gain. Ez view: scales the signed-field render. Volume view: scales the |E| envelope mapping to color + opacity (crank it for dim far-field; reduce it if the source area saturates to white)."
         >
           gain
           <input
