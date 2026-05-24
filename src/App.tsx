@@ -19,6 +19,7 @@ import {
   type SourceMode,
   type SourcePolarization,
   type SourceWaveform,
+  type ViewAxis3D,
   type ViewMode,
 } from './gpu/fdtd'
 import { ALL_SCENES, type Scene } from './scenes'
@@ -41,6 +42,9 @@ export default function App() {
     squareEdge: 20,
   })
   const [viewMode, setViewMode] = useState<ViewMode>('ez')
+  // 3D-only slice controls. Defaults: XY at midplane (matches engine init).
+  const [sliceAxis, setSliceAxis] = useState<ViewAxis3D>('xy')
+  const [sliceDepth, setSliceDepth] = useState(64)
   const [showGrid, setShowGrid] = useState(true)
   const [canUndo, setCanUndo] = useState(false)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null)
@@ -118,6 +122,18 @@ export default function App() {
   const handlePolarizationChange = useCallback((p: Polarization) => {
     setPolarization(p)
     setSourcePolarization(p === 'TEz' ? 'y' : 'z')
+    // When entering 3D, reset the slice view to the midplane of XY.
+    if (p === '3D') {
+      setSliceAxis('xy')
+      setSliceDepth(64)
+    }
+  }, [])
+
+  // Switching slice axis resets depth to the midplane of the new axis (which
+  // is the same 64 for a cubic 128³ grid; matters once non-cubic dims arrive).
+  const handleSliceAxisChange = useCallback((axis: ViewAxis3D) => {
+    setSliceAxis(axis)
+    setSliceDepth(64)
   }, [])
 
   useEffect(() => {
@@ -183,6 +199,10 @@ export default function App() {
         onProbesPerLineChange={setProbesPerLine}
         viewMode={viewMode}
         onViewModeChange={setViewMode}
+        sliceAxis={sliceAxis}
+        onSliceAxisChange={handleSliceAxisChange}
+        sliceDepth={sliceDepth}
+        onSliceDepthChange={setSliceDepth}
         showGrid={showGrid}
         onShowGridChange={setShowGrid}
         onUndo={handleUndo}
@@ -204,6 +224,8 @@ export default function App() {
           sourceWaveform={sourceWaveform}
           modulation={modulation}
           viewMode={viewMode}
+          sliceAxis={sliceAxis}
+          sliceDepth={sliceDepth}
           showGrid={showGrid}
           probes={probes}
           probesPerLine={probesPerLine}

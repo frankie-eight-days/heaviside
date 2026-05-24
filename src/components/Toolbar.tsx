@@ -4,6 +4,7 @@ import type {
   SourceMode,
   SourcePolarization,
   SourceWaveform,
+  ViewAxis3D,
   ViewMode,
 } from '../gpu/fdtd'
 
@@ -119,6 +120,10 @@ interface ToolbarProps {
   onProbesPerLineChange: (n: number) => void
   viewMode: ViewMode
   onViewModeChange: (m: ViewMode) => void
+  sliceAxis: ViewAxis3D
+  onSliceAxisChange: (a: ViewAxis3D) => void
+  sliceDepth: number
+  onSliceDepthChange: (d: number) => void
   showGrid: boolean
   onShowGridChange: (v: boolean) => void
   onUndo: () => void
@@ -153,6 +158,10 @@ export default function Toolbar({
   onProbesPerLineChange,
   viewMode,
   onViewModeChange,
+  sliceAxis,
+  onSliceAxisChange,
+  sliceDepth,
+  onSliceDepthChange,
   showGrid,
   onShowGridChange,
   onUndo,
@@ -427,6 +436,52 @@ export default function Toolbar({
       >
         λ grid
       </button>
+
+      {polarization === '3D' && (
+        <>
+          <div
+            className="segmented"
+            title="Slice axis. XY = top-down (look down z). XZ = side view (look down y). YZ = end view (look down x)."
+          >
+            <button
+              type="button"
+              className={'seg-btn' + (sliceAxis === 'xy' ? ' seg-btn--active' : '')}
+              onClick={() => onSliceAxisChange('xy')}
+            >
+              XY
+            </button>
+            <button
+              type="button"
+              className={'seg-btn' + (sliceAxis === 'xz' ? ' seg-btn--active' : '')}
+              onClick={() => onSliceAxisChange('xz')}
+            >
+              XZ
+            </button>
+            <button
+              type="button"
+              className={'seg-btn' + (sliceAxis === 'yz' ? ' seg-btn--active' : '')}
+              onClick={() => onSliceAxisChange('yz')}
+            >
+              YZ
+            </button>
+          </div>
+          <label
+            className="param-slider"
+            title="Depth along the axis perpendicular to the slice plane. 64 = midplane of the 128³ grid."
+          >
+            depth
+            <input
+              type="range"
+              min={0}
+              max={127}
+              step={1}
+              value={sliceDepth}
+              onChange={(e) => onSliceDepthChange(Number(e.target.value))}
+            />
+            <span className="param-value">{sliceDepth}</span>
+          </label>
+        </>
+      )}
 
       <div className="action-group">
         <button

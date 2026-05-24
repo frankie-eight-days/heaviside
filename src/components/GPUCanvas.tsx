@@ -4,6 +4,7 @@ import { createEngine } from '../gpu/engine'
 import {
   type BrushSpec,
   type FDTDEngine,
+  type FDTDEngine3D,
   type MaterialSnapshot,
   type ModulationParams,
   type Polarization,
@@ -12,6 +13,7 @@ import {
   type SourceMode,
   type SourcePolarization,
   type SourceWaveform,
+  type ViewAxis3D,
   type ViewMode,
 } from '../gpu/fdtd'
 import type { Scene, SceneConfig } from '../scenes/types'
@@ -43,6 +45,8 @@ interface GPUCanvasProps {
   sourceWaveform: SourceWaveform
   modulation: ModulationParams
   viewMode: ViewMode
+  sliceAxis: ViewAxis3D
+  sliceDepth: number
   showGrid: boolean
   probes: ProbeSpec[]
   probesPerLine: number
@@ -63,6 +67,8 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     sourceWaveform,
     modulation,
     viewMode,
+    sliceAxis,
+    sliceDepth,
     showGrid,
     probes,
     probesPerLine,
@@ -135,6 +141,11 @@ const GPUCanvas = forwardRef<GPUCanvasHandle, GPUCanvasProps>(function GPUCanvas
     viewModeRef.current = viewMode
     engineRef.current?.setViewMode(viewMode)
   }, [viewMode])
+  useEffect(() => {
+    const engine = engineRef.current
+    if (!engine || engine.polarization !== '3D') return
+    ;(engine as FDTDEngine3D).setViewSlice(sliceAxis, sliceDepth)
+  }, [sliceAxis, sliceDepth])
   useEffect(() => {
     probesRef.current = probes
     engineRef.current?.setProbes(probes)

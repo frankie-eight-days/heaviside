@@ -434,6 +434,26 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     return i + j * W + k * W * H
   }
 
+  // Map a (slice-plane-a, slice-plane-b, depth) tuple to (x, y, z) given the
+  // current view_axis. The "slice plane axes" follow the field-render-3d
+  // shader's UV mapping: XY → (x, y) fixed-z; XZ → (x, z) fixed-y; YZ → (y, z)
+  // fixed-x. depth always plugs into the remaining axis.
+  function sliceToVolume(a: number, b: number): [number, number, number] {
+    const axis = uniformU32[7]
+    const depth = uniformU32[8]
+    if (axis === 0) return [a, b, depth]
+    if (axis === 1) return [a, depth, b]
+    return [depth, a, b]
+  }
+
+  function sliceFaceDims(): [number, number, number] {
+    const axis = uniformU32[7]
+    // (face-a max, face-b max, depth-axis max)
+    if (axis === 0) return [W, H, D]
+    if (axis === 1) return [W, D, H]
+    return [H, D, W]
+  }
+
   function waveformValue(phase: number): number {
     switch (sourceWaveform) {
       case 'sine':
@@ -650,30 +670,28 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     writeSources()
   }
 
-  // 2D-shaped setSources interprets specs as XY at the current view depth.
+  // 2D-shaped setSources interprets specs as a click on the active slice.
+  // (gridX, gridY) are slice-plane coordinates; the engine maps them to the
+  // volume per view_axis.
   function setSources(specs: SourceSpec[]) {
     setSources3D(
-      specs.map((s) => ({
-        x: s.x,
-        y: s.y,
-        z: uniformU32[8],
-        phase: s.phase,
-        amplitude: s.amplitude,
-        polarization: s.polarization,
-      })),
+      specs.map((s) => {
+        const [x, y, z] = sliceToVolume(s.x, s.y)
+        return {
+          x,
+          y,
+          z,
+          phase: s.phase,
+          amplitude: s.amplitude,
+          polarization: s.polarization,
+        }
+      }),
     )
   }
 
   function placeSource(gridX: number, gridY: number) {
-    setSources3D([
-      {
-        x: gridX,
-        y: gridY,
-        z: uniformU32[8],
-        phase: 0,
-        amplitude: 1,
-        polarization: 'z',
-      },
+    setSources([
+      { x: gridX, y: gridY, phase: 0, amplitude: 1, polarization: 'z' },
     ])
   }
 
@@ -747,9 +765,14 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     writeUniforms()
   }
 
-  // 2D-shaped setProbes maps to (x, y, current view depth).
+  // 2D-shaped setProbes treats (x, y) as slice-plane coords on the active slice.
   function setProbes(specs: ProbeSpec[]) {
-    setProbes3D(specs.map((p) => ({ x: p.x, y: p.y, z: uniformU32[8] })))
+    setProbes3D(
+      specs.map((p) => {
+        const [x, y, z] = sliceToVolume(p.x, p.y)
+        return { x, y, z }
+      }),
+    )
   }
 
   function getProbeHistory(): ProbeHistorySnapshot {
@@ -761,27 +784,29 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
     }
   }
 
-  // Paint a disk on the current XY slice at view_depth. M9d will support
-  // painting on XZ/YZ slices and add a thickness control. PML cells are
-  // protected — material there must stay at vacuum for the absorber to work.
-  // PEC encoded as σ = -1 sentinel; otherwise σ is the brush conductivity.
-  function paint(gridX: number, gridY: number, brushRadius: number, brush: BrushSpec) {
-    const z = uniformU32[8]
-    if (z < PML_THICKNESS_3D || z + PML_THICKNESS_3D >= D) return
+  // Paint a disk on the currently active slice. The brush radius is in
+  // slice-plane cells; depth is fixed at view_depth on the perpendicular axis.
+  // PML cells are protected — material there must stay at vacuum for the
+  // absorber to work. PEC encoded as σ = -1 sentinel.
+  function paint(gridA: number, gridB: number, brushRadius: number, brush: BrushSpec) {
+    const depth = uniformU32[8]
+    const [aMax, bMax, depthMax] = sliceFaceDims()
+    if (depth < PML_THICKNESS_3D || depth + PML_THICKNESS_3D >= depthMax) return
     const r = Math.max(0, Math.floor(brushRadius))
     const r2 = r * r
-    const xMin = Math.max(PML_THICKNESS_3D, gridX - r)
-    const xMax = Math.min(W - PML_THICKNESS_3D - 1, gridX + r)
-    const yMin = Math.max(PML_THICKNESS_3D, gridY - r)
-    const yMax = Math.min(H - PML_THICKNESS_3D - 1, gridY + r)
+    const aMin = Math.max(PML_THICKNESS_3D, gridA - r)
+    const aMaxC = Math.min(aMax - PML_THICKNESS_3D - 1, gridA + r)
+    const bMin = Math.max(PML_THICKNESS_3D, gridB - r)
+    const bMaxC = Math.min(bMax - PML_THICKNESS_3D - 1, gridB + r)
     const er = brush.epsilonR
     const sg = brush.pec ? -1.0 : brush.sigma
-    for (let j = yMin; j <= yMax; j++) {
-      for (let i = xMin; i <= xMax; i++) {
-        const dx = i - gridX
-        const dy = j - gridY
-        if (dx * dx + dy * dy <= r2) {
-          const cell = cellIndex(i, j, z)
+    for (let b = bMin; b <= bMaxC; b++) {
+      for (let a = aMin; a <= aMaxC; a++) {
+        const da = a - gridA
+        const db = b - gridB
+        if (da * da + db * db <= r2) {
+          const [x, y, z] = sliceToVolume(a, b)
+          const cell = cellIndex(x, y, z)
           epsSigGrid[2 * cell] = er
           epsSigGrid[2 * cell + 1] = sg
         }
@@ -791,17 +816,19 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   }
 
   function paintRect(x0: number, y0: number, x1: number, y1: number, brush: BrushSpec) {
-    const z = uniformU32[8]
-    if (z < PML_THICKNESS_3D || z + PML_THICKNESS_3D >= D) return
-    const xMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(x0, x1)))
-    const xMax = Math.min(W - PML_THICKNESS_3D - 1, Math.floor(Math.max(x0, x1)))
-    const yMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(y0, y1)))
-    const yMax = Math.min(H - PML_THICKNESS_3D - 1, Math.floor(Math.max(y0, y1)))
+    const depth = uniformU32[8]
+    const [aMax, bMax, depthMax] = sliceFaceDims()
+    if (depth < PML_THICKNESS_3D || depth + PML_THICKNESS_3D >= depthMax) return
+    const aMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(x0, x1)))
+    const aMaxC = Math.min(aMax - PML_THICKNESS_3D - 1, Math.floor(Math.max(x0, x1)))
+    const bMin = Math.max(PML_THICKNESS_3D, Math.floor(Math.min(y0, y1)))
+    const bMaxC = Math.min(bMax - PML_THICKNESS_3D - 1, Math.floor(Math.max(y0, y1)))
     const er = brush.epsilonR
     const sg = brush.pec ? -1.0 : brush.sigma
-    for (let j = yMin; j <= yMax; j++) {
-      for (let i = xMin; i <= xMax; i++) {
-        const cell = cellIndex(i, j, z)
+    for (let b = bMin; b <= bMaxC; b++) {
+      for (let a = aMin; a <= aMaxC; a++) {
+        const [x, y, z] = sliceToVolume(a, b)
+        const cell = cellIndex(x, y, z)
         epsSigGrid[2 * cell] = er
         epsSigGrid[2 * cell + 1] = sg
       }
@@ -837,10 +864,10 @@ export function createFDTD_3D(gpu: GPUContext, dim: number = DEFAULT_DIM): FDTDE
   }
 
   function getDims() {
-    // GPUCanvas reads getDims() for pointer→cell mapping. Return the XY face
-    // dims (W, H) — the slice the user is interacting with in the default
-    // XY view. Pointer hits at the active slice depth z = uniformU32[8].
-    return { width: W, height: H }
+    // GPUCanvas reads getDims() for pointer→cell mapping. Return the face dims
+    // of the *currently selected slice* so pointer coordinates map correctly.
+    const [aMax, bMax] = sliceFaceDims()
+    return { width: aMax, height: bMax }
   }
 
   function getDims3D() {
